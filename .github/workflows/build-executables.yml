@@ -27,13 +27,14 @@ jobs:
     
     - name: Build Windows executable
       run: |
+        cd "Battle Street"
         pyinstaller battle_street.spec --clean
     
     - name: Upload Windows executable
       uses: actions/upload-artifact@v4
       with:
         name: BattleStreet-Windows
-        path: dist/BattleStreet.exe
+        path: Battle Street/dist/BattleStreet.exe
         retention-days: 30
 
   build-macos:
@@ -55,13 +56,14 @@ jobs:
     
     - name: Build macOS executable
       run: |
+        cd "Battle Street"
         pyinstaller battle_street.spec --clean
     
     - name: Upload macOS executable
       uses: actions/upload-artifact@v4
       with:
         name: BattleStreet-macOS
-        path: dist/BattleStreet.app
+        path: Battle Street/dist/BattleStreet.app
         retention-days: 30
 
   create-release:

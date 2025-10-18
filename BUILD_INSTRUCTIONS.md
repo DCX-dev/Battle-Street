@@ -43,17 +43,19 @@ pip install pygame pyinstaller
 
 ### Windows
 ```bash
+cd "Battle Street"
 pyinstaller battle_street.spec --clean
 ```
 
-The executable will be in `dist/BattleStreet.exe`
+The executable will be in `Battle Street/dist/BattleStreet.exe`
 
 ### macOS
 ```bash
+cd "Battle Street"
 pyinstaller battle_street.spec --clean
 ```
 
-The app bundle will be in `dist/BattleStreet.app`
+The app bundle will be in `Battle Street/dist/BattleStreet.app`
 
 ## Distribution
 
