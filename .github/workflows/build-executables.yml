@@ -1,0 +1,105 @@
+name: Build Executables
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pygame pyinstaller
+    
+    - name: Build Windows executable
+      run: |
+        pyinstaller battle_street.spec --clean
+    
+    - name: Upload Windows executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: BattleStreet-Windows
+        path: dist/BattleStreet.exe
+        retention-days: 30
+
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pygame pyinstaller
+    
+    - name: Build macOS executable
+      run: |
+        pyinstaller battle_street.spec --clean
+    
+    - name: Upload macOS executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: BattleStreet-macOS
+        path: dist/BattleStreet.app
+        retention-days: 30
+
+  create-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+    - name: Download Windows executable
+      uses: actions/download-artifact@v3
+      with:
+        name: BattleStreet-Windows
+        path: windows-build
+    
+    - name: Download macOS executable
+      uses: actions/download-artifact@v3
+      with:
+        name: BattleStreet-macOS
+        path: macos-build
+    
+    - name: Create Release Info
+      run: |
+        echo "# Battle Street - Latest Build" > release-info.md
+        echo "" >> release-info.md
+        echo "Build Date: $(date)" >> release-info.md
+        echo "Commit: ${{ github.sha }}" >> release-info.md
+        echo "" >> release-info.md
+        echo "## Downloads" >> release-info.md
+        echo "- Windows: BattleStreet.exe" >> release-info.md
+        echo "- macOS: BattleStreet" >> release-info.md
+    
+    - name: Upload combined artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: BattleStreet-All-Platforms
+        path: |
+          windows-build/
+          macos-build/
+          release-info.md
+        retention-days: 90
+
