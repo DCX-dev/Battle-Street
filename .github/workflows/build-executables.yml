@@ -30,7 +30,7 @@ jobs:
         pyinstaller battle_street.spec --clean
     
     - name: Upload Windows executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: BattleStreet-Windows
         path: dist/BattleStreet.exe
@@ -58,7 +58,7 @@ jobs:
         pyinstaller battle_street.spec --clean
     
     - name: Upload macOS executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: BattleStreet-macOS
         path: dist/BattleStreet.app
@@ -71,13 +71,13 @@ jobs:
     
     steps:
     - name: Download Windows executable
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: BattleStreet-Windows
         path: windows-build
     
     - name: Download macOS executable
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: BattleStreet-macOS
         path: macos-build
@@ -94,7 +94,7 @@ jobs:
         echo "- macOS: BattleStreet" >> release-info.md
     
     - name: Upload combined artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: BattleStreet-All-Platforms
         path: |
