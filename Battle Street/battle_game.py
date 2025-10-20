@@ -78,7 +78,7 @@ weapon_files = {
 }
 
 for weapon_name, filename in weapon_files.items():
-    filepath = os.path.join("weapons", filename)
+    filepath = os.path.join("..", "weapons", filename)
     if os.path.exists(filepath):
         WEAPON_TEXTURES[weapon_name] = pygame.image.load(filepath).convert_alpha()
         print(f"✅ Loaded {weapon_name} texture")
@@ -144,6 +144,57 @@ UPGRADES = {
     "Speed Boost": {"effect": "speed", "value": 2, "cost": 40},
     "Health Up": {"effect": "health", "value": 20, "cost": 60},
     "Shield": {"effect": "defense", "value": 5, "cost": 100},
+}
+
+# Vehicles
+VEHICLES = {
+    "None": {
+        "name": "No Vehicle (On Foot)",
+        "cost": 0,
+        "health_multiplier": 1.0,
+        "speed_multiplier": 1.0,
+        "can_fly": False,
+        "size": (40, 60),
+        "color": None,  # Uses player color
+        "description": "Standard on-foot combat"
+    },
+    "Rocket": {
+        "name": "Rocket Pack",
+        "cost": 500,
+        "health_multiplier": 1.5,
+        "speed_multiplier": 1.3,
+        "can_fly": True,
+        "size": (50, 70),
+        "color": (255, 100, 50),
+        "description": "Fast flying vehicle with missile launcher"
+    },
+    "Tank": {
+        "name": "Battle Tank",
+        "cost": 1000,
+        "health_multiplier": 3.0,
+        "speed_multiplier": 0.7,
+        "can_fly": False,
+        "size": (80, 60),
+        "color": (100, 120, 100),
+        "description": "Heavy armor, powerful weapons, slow movement"
+    },
+    "Ship": {
+        "name": "Battleship",
+        "cost": 1000000,
+        "health_multiplier": 40.0,
+        "speed_multiplier": 0.5,
+        "can_fly": True,
+        "size": (150, 120),
+        "color": (150, 150, 180),
+        "description": "Massive flying fortress with incredible firepower"
+    }
+}
+
+# Powers (placeholder for future expansion)
+POWERS = {
+    "Shield Bubble": {"effect": "shield", "duration": 300, "cost": 200, "description": "Temporary invincibility"},
+    "Speed Burst": {"effect": "speed_burst", "duration": 180, "cost": 150, "description": "Triple speed temporarily"},
+    "Health Regen": {"effect": "regen", "duration": 240, "cost": 180, "description": "Regenerate health over time"},
 }
 
 # Battle Maps
@@ -292,6 +343,10 @@ class Player:
         self.facing_right = True
         self.shoot_cooldown = 0
         
+        # Vehicle system
+        self.vehicle = "None"
+        self.owned_vehicles = ["None"]
+        
         # Temporary buffs from collectibles
         self.temp_speed_boost = 0
         self.temp_damage_boost = 0
@@ -320,39 +375,60 @@ class Player:
             if self.temp_damage_duration == 0:
                 self.temp_damage_boost = 0
         
-        # Horizontal movement (with speed boost)
-        move_speed = self.speed + self.temp_speed_boost
-        if keys[self.controls["left"]]:
-            self.x -= move_speed
-            self.facing_right = False
-        if keys[self.controls["right"]]:
-            self.x += move_speed
-            self.facing_right = True
+        # Get vehicle data
+        vehicle_data = VEHICLES[self.vehicle]
+        can_fly = vehicle_data["can_fly"]
+        speed_mult = vehicle_data["speed_multiplier"]
         
-        # Jump (Space key - check directly since it's universal)
-        if keys[pygame.K_SPACE] and self.on_ground:
-            self.velocity_y = self.jump_power
-            self.on_ground = False
+        # Calculate move speed (with vehicle and temp boosts)
+        move_speed = (self.speed + self.temp_speed_boost) * speed_mult
         
-        # Apply gravity
-        self.velocity_y += self.gravity
-        self.y += self.velocity_y
-        
-        # Ground collision
-        if self.y >= self.ground_y:
-            self.y = self.ground_y
-            self.velocity_y = 0
-            self.on_ground = True
-        else:
-            self.on_ground = False
+        # Flying vehicles have different movement
+        if can_fly:
+            # Free 2D movement for flying vehicles
+            if keys[self.controls["left"]]:
+                self.x -= move_speed
+                self.facing_right = False
+            if keys[self.controls["right"]]:
+                self.x += move_speed
+                self.facing_right = True
+            if keys[pygame.K_w]:  # Up
+                self.y -= move_speed
+            if keys[pygame.K_s]:  # Down
+                self.y += move_speed
             
-        # Keep player on screen horizontally
-        self.x = max(0, min(SCREEN_WIDTH - self.width, self.x))
-        
-        # Keep from going too high
-        if self.y < 50:
-            self.y = 50
+            # No gravity for flying vehicles
             self.velocity_y = 0
+            self.on_ground = False
+        else:
+            # Ground-based movement for non-flying vehicles
+            if keys[self.controls["left"]]:
+                self.x -= move_speed
+                self.facing_right = False
+            if keys[self.controls["right"]]:
+                self.x += move_speed
+                self.facing_right = True
+            
+            # Jump (Space key - check directly since it's universal)
+            if keys[pygame.K_SPACE] and self.on_ground:
+                self.velocity_y = self.jump_power
+                self.on_ground = False
+            
+            # Apply gravity
+            self.velocity_y += self.gravity
+            self.y += self.velocity_y
+            
+            # Ground collision
+            if self.y >= self.ground_y:
+                self.y = self.ground_y
+                self.velocity_y = 0
+                self.on_ground = True
+            else:
+                self.on_ground = False
+        
+        # Keep player on screen
+        self.x = max(0, min(SCREEN_WIDTH - self.width, self.x))
+        self.y = max(50, min(SCREEN_HEIGHT - self.height - 50, self.y))
     
     def shoot(self, target_x, target_y):
         weapon_data = WEAPONS[self.weapon]
@@ -436,20 +512,72 @@ class Player:
         return False
     
     def draw(self, screen):
-        # Draw player body with outline
-        pygame.draw.rect(screen, BLACK, (self.x - 2, self.y - 2, self.width + 4, self.height + 4))
-        pygame.draw.rect(screen, self.color, (self.x, self.y, self.width, self.height))
+        vehicle_data = VEHICLES[self.vehicle]
+        vehicle_color = vehicle_data["color"] if vehicle_data["color"] else self.color
         
-        # Draw simple face
-        eye_y = self.y + 15
-        if self.facing_right:
-            pygame.draw.circle(screen, WHITE, (int(self.x + 25), eye_y), 5)
-            pygame.draw.circle(screen, BLACK, (int(self.x + 25), eye_y), 2)
-        else:
-            pygame.draw.circle(screen, WHITE, (int(self.x + 15), eye_y), 5)
-            pygame.draw.circle(screen, BLACK, (int(self.x + 15), eye_y), 2)
+        # Draw vehicle based on type
+        if self.vehicle == "None":
+            # Draw player body with outline
+            pygame.draw.rect(screen, BLACK, (self.x - 2, self.y - 2, self.width + 4, self.height + 4))
+            pygame.draw.rect(screen, self.color, (self.x, self.y, self.width, self.height))
+            
+            # Draw simple face
+            eye_y = self.y + 15
+            if self.facing_right:
+                pygame.draw.circle(screen, WHITE, (int(self.x + 25), eye_y), 5)
+                pygame.draw.circle(screen, BLACK, (int(self.x + 25), eye_y), 2)
+            else:
+                pygame.draw.circle(screen, WHITE, (int(self.x + 15), eye_y), 5)
+                pygame.draw.circle(screen, BLACK, (int(self.x + 15), eye_y), 2)
+        elif self.vehicle == "Tank":
+            # Draw tank
+            # Tank body
+            pygame.draw.rect(screen, BLACK, (self.x - 2, self.y - 2, self.width + 4, self.height + 4))
+            pygame.draw.rect(screen, vehicle_color, (self.x, self.y + 20, self.width, self.height - 20))
+            # Tank turret
+            pygame.draw.circle(screen, vehicle_color, (int(self.x + self.width // 2), int(self.y + 25)), 20)
+            pygame.draw.circle(screen, BLACK, (int(self.x + self.width // 2), int(self.y + 25)), 20, 2)
+            # Tank barrel (points in facing direction)
+            barrel_x = self.x + self.width // 2
+            barrel_end = barrel_x + (30 if self.facing_right else -30)
+            pygame.draw.line(screen, BLACK, (barrel_x, self.y + 25), (barrel_end, self.y + 25), 6)
+            # Tank tracks
+            pygame.draw.rect(screen, BLACK, (self.x, self.y + self.height - 10, self.width, 10), 3)
+        elif self.vehicle == "Rocket":
+            # Draw rocket pack
+            # Rocket body
+            pygame.draw.ellipse(screen, vehicle_color, (self.x, self.y, self.width, self.height))
+            pygame.draw.ellipse(screen, BLACK, (self.x, self.y, self.width, self.height), 2)
+            # Rocket flames
+            flame_y = self.y + self.height
+            for i in range(3):
+                flame_size = random.randint(5, 15)
+                flame_x = self.x + self.width // 2 + random.randint(-10, 10)
+                flame_colors = [(255, 200, 0), (255, 100, 0), (255, 50, 0)]
+                pygame.draw.circle(screen, flame_colors[i % 3], (flame_x, flame_y + i * 5), flame_size)
+            # Cockpit window
+            pygame.draw.circle(screen, (150, 200, 255), (int(self.x + self.width // 2), int(self.y + 20)), 12)
+        elif self.vehicle == "Ship":
+            # Draw massive battleship
+            # Ship hull
+            pygame.draw.rect(screen, BLACK, (self.x - 2, self.y - 2, self.width + 4, self.height + 4))
+            pygame.draw.rect(screen, vehicle_color, (self.x, self.y + 30, self.width, self.height - 30))
+            # Ship bridge/tower
+            bridge_w = self.width // 3
+            bridge_x = self.x + self.width // 2 - bridge_w // 2
+            pygame.draw.rect(screen, vehicle_color, (bridge_x, self.y, bridge_w, 40))
+            pygame.draw.rect(screen, BLACK, (bridge_x, self.y, bridge_w, 40), 2)
+            # Windows
+            for i in range(3):
+                win_x = bridge_x + 10 + i * 15
+                pygame.draw.rect(screen, CYAN, (win_x, self.y + 10, 10, 8))
+            # Missile launchers
+            for i in range(4):
+                launcher_x = self.x + 10 + i * 35
+                pygame.draw.rect(screen, DARK_GRAY, (launcher_x, self.y + 50, 10, 20))
+                pygame.draw.rect(screen, RED, (launcher_x + 2, self.y + 50, 6, 15))
         
-        # Draw weapon on player
+        # Draw weapon on player/vehicle
         self.draw_weapon(screen)
         
         # Draw health bar with border
@@ -552,6 +680,7 @@ class Game:
         self.shop_selection = 0
         self.shop_scroll_offset = 0
         self.shop_player = 1
+        self.shop_tab = 0  # 0=Weapons, 1=Vehicles, 2=Powers
         self.is_cpu_mode = True
         self.is_network_game = False
         self.is_host = False
@@ -637,6 +766,10 @@ class Game:
         self.collectible_spawn_interval = 180  # Spawn every 3 seconds
         
     def reset_battle(self):
+        # Apply vehicle stats to ensure size/health are correct
+        self.apply_vehicle_stats(self.player1)
+        self.apply_vehicle_stats(self.player2)
+        
         # Reset main players
         self.player1.health = self.player1.max_health
         self.player2.health = self.player2.max_health
@@ -898,9 +1031,69 @@ class Game:
         
         # Draw controls at bottom with background
         pygame.draw.rect(screen, (0, 0, 0, 128), (0, SCREEN_HEIGHT - 40, SCREEN_WIDTH, 40))
-        controls1 = tiny_font.render("A/D=Move | Space=Jump | Click=Shoot | ESC=Menu", True, WHITE)
+        
+        # Update controls text based on vehicle
+        if self.player1.vehicle == "Ship" or self.player1.vehicle == "Rocket":
+            controls1 = tiny_font.render("A/D=Move | W/S=Up/Down | Click=Shoot | ESC=Menu", True, WHITE)
+        else:
+            controls1 = tiny_font.render("A/D=Move | Space=Jump | Click=Shoot | ESC=Menu", True, WHITE)
         controls_rect = controls1.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 28))
         screen.blit(controls1, controls_rect)
+        
+        # Draw minimap for Ship vehicle
+        if self.player1.vehicle == "Ship":
+            self.draw_minimap()
+        
+    def draw_minimap(self):
+        """Draw minimap for the Ship vehicle showing exterior view"""
+        # Minimap dimensions and position (bottom-right corner)
+        minimap_width = 200
+        minimap_height = 150
+        minimap_x = SCREEN_WIDTH - minimap_width - 20
+        minimap_y = SCREEN_HEIGHT - minimap_height - 60
+        
+        # Draw minimap background
+        pygame.draw.rect(screen, (20, 20, 40), (minimap_x, minimap_y, minimap_width, minimap_height))
+        pygame.draw.rect(screen, YELLOW, (minimap_x, minimap_y, minimap_width, minimap_height), 3)
+        
+        # Draw minimap title
+        minimap_title = tiny_font.render("RADAR", True, YELLOW)
+        screen.blit(minimap_title, (minimap_x + 5, minimap_y + 5))
+        
+        # Calculate scaling factor for minimap
+        scale_x = minimap_width / SCREEN_WIDTH
+        scale_y = minimap_height / SCREEN_HEIGHT
+        
+        # Draw players on minimap
+        for i, player in enumerate(self.all_players):
+            if player.health > 0:
+                mini_x = minimap_x + int(player.x * scale_x)
+                mini_y = minimap_y + int(player.y * scale_y)
+                
+                # Draw player marker
+                if player == self.player1:
+                    pygame.draw.circle(screen, GREEN, (mini_x, mini_y), 6)
+                    pygame.draw.circle(screen, WHITE, (mini_x, mini_y), 6, 1)
+                else:
+                    pygame.draw.circle(screen, RED, (mini_x, mini_y), 5)
+        
+        # Draw collectibles on minimap
+        for collectible in self.collectibles:
+            mini_x = minimap_x + int(collectible.x * scale_x)
+            mini_y = minimap_y + int(collectible.y * scale_y)
+            if collectible.type == "coin":
+                pygame.draw.circle(screen, YELLOW, (mini_x, mini_y), 2)
+            else:
+                pygame.draw.circle(screen, CYAN, (mini_x, mini_y), 2)
+        
+        # Draw grid lines
+        for i in range(1, 4):
+            # Vertical lines
+            grid_x = minimap_x + i * (minimap_width // 4)
+            pygame.draw.line(screen, (40, 40, 60), (grid_x, minimap_y), (grid_x, minimap_y + minimap_height))
+            # Horizontal lines
+            grid_y = minimap_y + i * (minimap_height // 4)
+            pygame.draw.line(screen, (40, 40, 60), (minimap_x, grid_y), (minimap_x + minimap_width, grid_y))
         
     def draw_shop(self):
         # Gradient background
@@ -915,29 +1108,68 @@ class Game:
         title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 40))
         screen.blit(title, title_rect)
         
-        # Player info panel (removed player tabs - only Player 1 now)
+        # Tab buttons
+        tab_names = ["WEAPONS", "VEHICLES", "POWERS"]
+        tab_width = 200
+        tab_height = 40
+        tab_y = 90
+        tab_spacing = 20
+        total_tab_width = len(tab_names) * tab_width + (len(tab_names) - 1) * tab_spacing
+        start_x = (SCREEN_WIDTH - total_tab_width) // 2
+        
+        for i, tab_name in enumerate(tab_names):
+            tab_x = start_x + i * (tab_width + tab_spacing)
+            tab_rect = pygame.Rect(tab_x, tab_y, tab_width, tab_height)
+            
+            # Draw tab
+            if i == self.shop_tab:
+                pygame.draw.rect(screen, YELLOW, tab_rect)
+                tab_color = BLACK
+                pygame.draw.rect(screen, WHITE, tab_rect, 3)
+            else:
+                pygame.draw.rect(screen, (60, 60, 80), tab_rect)
+                tab_color = WHITE
+                pygame.draw.rect(screen, LIGHT_GRAY, tab_rect, 2)
+            
+            tab_text = text_font.render(tab_name, True, tab_color)
+            text_rect = tab_text.get_rect(center=tab_rect.center)
+            screen.blit(tab_text, text_rect)
+        
+        # Player info panel
         player = self.player1
-        info_rect = pygame.Rect(50, 100, SCREEN_WIDTH - 100, 80)
+        info_rect = pygame.Rect(50, 145, SCREEN_WIDTH - 100, 60)
         pygame.draw.rect(screen, (50, 50, 70), info_rect)
         pygame.draw.rect(screen, YELLOW, info_rect, 2)
         
-        coin_text = text_font.render(f"Your Coins: {player.coins}", True, YELLOW)
-        screen.blit(coin_text, (70, 110))
+        coin_text = text_font.render(f"Coins: {player.coins}", True, YELLOW)
+        screen.blit(coin_text, (70, 155))
         
-        current = text_font.render(f"Equipped: {player.weapon}", True, GREEN)
-        screen.blit(current, (70, 145))
+        if self.shop_tab == 0:  # Weapons
+            current = small_font.render(f"Weapon: {player.weapon}", True, GREEN)
+        elif self.shop_tab == 1:  # Vehicles
+            current = small_font.render(f"Vehicle: {VEHICLES[player.vehicle]['name']}", True, GREEN)
+        else:  # Powers
+            current = small_font.render(f"Powers: Coming Soon!", True, GREEN)
+        screen.blit(current, (70, 180))
         
-        # Items list with scrolling
+        # Build items list based on current tab
         items = []
-        for weapon_name, weapon_data in WEAPONS.items():
-            items.append(("weapon", weapon_name, weapon_data))
-        for upgrade_name, upgrade_data in UPGRADES.items():
-            items.append(("upgrade", upgrade_name, upgrade_data))
+        if self.shop_tab == 0:  # Weapons tab
+            for weapon_name, weapon_data in WEAPONS.items():
+                items.append(("weapon", weapon_name, weapon_data))
+            for upgrade_name, upgrade_data in UPGRADES.items():
+                items.append(("upgrade", upgrade_name, upgrade_data))
+        elif self.shop_tab == 1:  # Vehicles tab
+            for vehicle_name, vehicle_data in VEHICLES.items():
+                items.append(("vehicle", vehicle_name, vehicle_data))
+        elif self.shop_tab == 2:  # Powers tab
+            for power_name, power_data in POWERS.items():
+                items.append(("power", power_name, power_data))
         
         # Define scrollable area
-        list_start_y = 200
-        list_height = SCREEN_HEIGHT - 270
-        item_height = 50
+        list_start_y = 220
+        list_height = SCREEN_HEIGHT - 290
+        item_height = 60
         visible_items = list_height // item_height
         
         # Auto-scroll to keep selection visible
@@ -969,9 +1201,8 @@ class Game:
                     pygame.draw.rect(screen, (50, 50, 60), item_rect)
                     text_color = WHITE
                 
-                # Draw item info
+                # Draw item info based on type
                 if item_type == "weapon":
-                    # Check if owned (purchased)
                     owned_weapons = getattr(player, 'owned_weapons', [player.weapon])
                     is_owned = item_name in owned_weapons
                     is_equipped = player.weapon == item_name
@@ -984,8 +1215,32 @@ class Game:
                         f"Damage: {item_data['damage']} | Speed: {item_data['speed']} | Cost: {item_data['cost']} coins",
                         True, text_color
                     )
-                    screen.blit(stats_text, (70, y_pos + 28))
-                else:
+                    screen.blit(stats_text, (70, y_pos + 32))
+                elif item_type == "vehicle":
+                    owned_vehicles = getattr(player, 'owned_vehicles', ["None"])
+                    is_owned = item_name in owned_vehicles
+                    is_equipped = player.vehicle == item_name
+                    
+                    status = " [ACTIVE]" if is_equipped else (" [OWNED]" if is_owned else "")
+                    name_text = small_font.render(f"{item_data['name']}{status}", True, text_color)
+                    screen.blit(name_text, (70, y_pos + 5))
+                    
+                    stats_text = tiny_font.render(
+                        f"HP: x{item_data['health_multiplier']} | Speed: x{item_data['speed_multiplier']} | "
+                        f"{'CAN FLY' if item_data['can_fly'] else 'GROUND'} | Cost: {item_data['cost']} coins",
+                        True, text_color
+                    )
+                    screen.blit(stats_text, (70, y_pos + 32))
+                elif item_type == "power":
+                    name_text = small_font.render(f"{item_name}", True, text_color)
+                    screen.blit(name_text, (70, y_pos + 5))
+                    
+                    stats_text = tiny_font.render(
+                        f"{item_data['description']} | Cost: {item_data['cost']} coins",
+                        True, text_color
+                    )
+                    screen.blit(stats_text, (70, y_pos + 32))
+                else:  # upgrade
                     name_text = small_font.render(f"{item_name}", True, text_color)
                     screen.blit(name_text, (70, y_pos + 5))
                     
@@ -993,7 +1248,7 @@ class Game:
                         f"{item_data['effect'].title()}: +{item_data['value']} | Cost: {item_data['cost']} coins",
                         True, text_color
                     )
-                    screen.blit(stats_text, (70, y_pos + 28))
+                    screen.blit(stats_text, (70, y_pos + 32))
         
         # Draw scroll indicator
         if len(items) > visible_items:
@@ -1004,7 +1259,10 @@ class Game:
         # Instructions at bottom
         inst_bg = pygame.Rect(0, SCREEN_HEIGHT - 50, SCREEN_WIDTH, 50)
         pygame.draw.rect(screen, (20, 20, 30), inst_bg)
-        inst = small_font.render("↑↓: Navigate | B: Buy | E: Equip (weapons) | ESC: Menu", True, WHITE)
+        if self.shop_tab == 0:
+            inst = tiny_font.render("←→: Switch Tab | ↑↓: Navigate | B: Buy | E: Equip | ESC: Menu", True, WHITE)
+        else:
+            inst = tiny_font.render("←→: Switch Tab | ↑↓: Navigate | B: Buy | E: Equip/Activate | ESC: Menu", True, WHITE)
         inst_rect = inst.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 25))
         screen.blit(inst, inst_rect)
         
@@ -1145,9 +1403,25 @@ class Game:
                 
     def handle_shop_input(self, event):
         if event.type == pygame.KEYDOWN:
-            num_items = len(WEAPONS) + len(UPGRADES)
+            # Calculate number of items based on current tab
+            if self.shop_tab == 0:  # Weapons
+                num_items = len(WEAPONS) + len(UPGRADES)
+            elif self.shop_tab == 1:  # Vehicles
+                num_items = len(VEHICLES)
+            else:  # Powers
+                num_items = len(POWERS)
             
-            if event.key == pygame.K_UP:
+            if event.key == pygame.K_LEFT:
+                # Switch to previous tab
+                self.shop_tab = (self.shop_tab - 1) % 3
+                self.shop_selection = 0
+                self.shop_scroll_offset = 0
+            elif event.key == pygame.K_RIGHT:
+                # Switch to next tab
+                self.shop_tab = (self.shop_tab + 1) % 3
+                self.shop_selection = 0
+                self.shop_scroll_offset = 0
+            elif event.key == pygame.K_UP:
                 self.shop_selection = (self.shop_selection - 1) % num_items
             elif event.key == pygame.K_DOWN:
                 self.shop_selection = (self.shop_selection + 1) % num_items
@@ -1155,7 +1429,7 @@ class Game:
                 # Buy item
                 self.purchase_item()
             elif event.key == pygame.K_e:
-                # Equip weapon (only for weapons)
+                # Equip weapon/vehicle
                 self.equip_item()
             elif event.key == pygame.K_ESCAPE:
                 self.state = GameState.MENU
@@ -1198,7 +1472,14 @@ class Game:
                 
     def purchase_item(self):
         player = self.player1
-        items = list(WEAPONS.items()) + list(UPGRADES.items())
+        
+        # Build items list based on current tab
+        if self.shop_tab == 0:  # Weapons
+            items = list(WEAPONS.items()) + list(UPGRADES.items())
+        elif self.shop_tab == 1:  # Vehicles
+            items = list(VEHICLES.items())
+        else:  # Powers
+            items = list(POWERS.items())
         
         if self.shop_selection < len(items):
             item_name, item_data = items[self.shop_selection]
@@ -1207,64 +1488,117 @@ class Game:
             print(f"Attempting to buy: {item_name} for {cost} coins. You have: {player.coins}")
             
             if player.coins >= cost:
-                if self.shop_selection < len(WEAPONS):
-                    # It's a weapon - add to owned weapons
-                    if not hasattr(player, 'owned_weapons'):
-                        player.owned_weapons = [player.weapon]
-                    
-                    if item_name not in player.owned_weapons:
+                if self.shop_tab == 0:  # Weapons tab
+                    if self.shop_selection < len(WEAPONS):
+                        # It's a weapon - add to owned weapons
+                        if not hasattr(player, 'owned_weapons'):
+                            player.owned_weapons = [player.weapon]
+                        
+                        if item_name not in player.owned_weapons:
+                            player.coins -= cost
+                            player.owned_weapons.append(item_name)
+                            print(f"Purchased {item_name}! Coins remaining: {player.coins}")
+                            print(f"Owned weapons: {player.owned_weapons}")
+                            self.save_progress()
+                        else:
+                            print(f"Already own {item_name}")
+                    else:
+                        # It's an upgrade - apply immediately
                         player.coins -= cost
-                        player.owned_weapons.append(item_name)
+                        if item_data["effect"] == "speed":
+                            player.speed += item_data["value"]
+                        elif item_data["effect"] == "health":
+                            player.max_health += item_data["value"]
+                            player.health += item_data["value"]
+                        elif item_data["effect"] == "defense":
+                            player.defense += item_data["value"]
+                        
+                        print(f"Purchased upgrade {item_name}! Coins remaining: {player.coins}")
+                        self.save_progress()
+                elif self.shop_tab == 1:  # Vehicles tab
+                    # It's a vehicle - add to owned vehicles
+                    if not hasattr(player, 'owned_vehicles'):
+                        player.owned_vehicles = ["None"]
+                    
+                    if item_name not in player.owned_vehicles:
+                        player.coins -= cost
+                        player.owned_vehicles.append(item_name)
                         print(f"Purchased {item_name}! Coins remaining: {player.coins}")
-                        print(f"Owned weapons: {player.owned_weapons}")
+                        print(f"Owned vehicles: {player.owned_vehicles}")
                         self.save_progress()
                     else:
                         print(f"Already own {item_name}")
-                else:
-                    # It's an upgrade - apply immediately
-                    player.coins -= cost
-                    if item_data["effect"] == "speed":
-                        player.speed += item_data["value"]
-                    elif item_data["effect"] == "health":
-                        player.max_health += item_data["value"]
-                        player.health += item_data["value"]
-                    elif item_data["effect"] == "defense":
-                        player.defense += item_data["value"]
-                    
-                    print(f"Purchased upgrade {item_name}! Coins remaining: {player.coins}")
-                    self.save_progress()
+                elif self.shop_tab == 2:  # Powers tab
+                    print("Powers are not yet implemented!")
             else:
                 print(f"Not enough coins! Need {cost}, have {player.coins}")
     
     def equip_item(self):
-        """Equip a weapon that has been purchased"""
+        """Equip a weapon or vehicle that has been purchased"""
         player = self.player1
-        items = list(WEAPONS.items()) + list(UPGRADES.items())
         
-        if self.shop_selection < len(WEAPONS):
+        # Build items list based on current tab
+        if self.shop_tab == 0:  # Weapons
+            items = list(WEAPONS.items()) + list(UPGRADES.items())
+        elif self.shop_tab == 1:  # Vehicles
+            items = list(VEHICLES.items())
+        else:  # Powers
+            items = list(POWERS.items())
+        
+        if self.shop_tab == 0:  # Weapons tab
+            if self.shop_selection < len(WEAPONS):
+                item_name, item_data = items[self.shop_selection]
+                
+                print(f"Attempting to equip: {item_name}")
+                
+                # Initialize owned_weapons if it doesn't exist
+                if not hasattr(player, 'owned_weapons'):
+                    player.owned_weapons = [player.weapon]
+                
+                # Check if weapon is owned
+                if item_name in player.owned_weapons:
+                    player.weapon = item_name
+                    print(f"Equipped {item_name}!")
+                    
+                    # CPU always uses same weapon as player
+                    if not self.is_network_game and self.is_cpu_mode:
+                        self.player2.weapon = item_name
+                        print(f"🤖 CPU weapon set to: {item_name}")
+                    
+                    self.save_progress()
+                else:
+                    print(f"Don't own {item_name} yet - buy it first!")
+            else:
+                print("Can't equip upgrades - they apply automatically when purchased")
+        elif self.shop_tab == 1:  # Vehicles tab
             item_name, item_data = items[self.shop_selection]
             
-            print(f"Attempting to equip: {item_name}")
+            print(f"Attempting to activate vehicle: {item_name}")
             
-            # Initialize owned_weapons if it doesn't exist
-            if not hasattr(player, 'owned_weapons'):
-                player.owned_weapons = [player.weapon]
+            # Initialize owned_vehicles if it doesn't exist
+            if not hasattr(player, 'owned_vehicles'):
+                player.owned_vehicles = ["None"]
             
-            # Check if weapon is owned
-            if item_name in player.owned_weapons:
-                player.weapon = item_name
-                print(f"Equipped {item_name}!")
+            # Check if vehicle is owned
+            if item_name in player.owned_vehicles:
+                old_vehicle = player.vehicle
+                player.vehicle = item_name
                 
-                # CPU always uses same weapon as player
+                # Apply vehicle stats
+                self.apply_vehicle_stats(player)
+                
+                print(f"Activated {item_name}!")
+                
+                # CPU uses None vehicle always (for balance)
                 if not self.is_network_game and self.is_cpu_mode:
-                    self.player2.weapon = item_name
-                    print(f"🤖 CPU weapon set to: {item_name}")
+                    self.player2.vehicle = "None"
+                    self.apply_vehicle_stats(self.player2)
                 
                 self.save_progress()
             else:
                 print(f"Don't own {item_name} yet - buy it first!")
         else:
-            print("Can't equip upgrades - they apply automatically when purchased")
+            print("Powers are not yet implemented!")
     
     def give_cpu_random_upgrade(self, prefer_weapon=False):
         """Give CPU a small random balanced upgrade"""
@@ -1321,6 +1655,21 @@ class Game:
             cpu.defense += 2
             print(f"🛡️ CPU defense increased!")
     
+    def apply_vehicle_stats(self, player):
+        """Apply vehicle stats to a player (health, size, etc.)"""
+        vehicle_data = VEHICLES[player.vehicle]
+        
+        # Update size based on vehicle
+        player.width, player.height = vehicle_data["size"]
+        
+        # Apply health multiplier to max_health
+        base_max_health = 100  # Base health
+        player.max_health = int(base_max_health * vehicle_data["health_multiplier"])
+        
+        # Clamp current health to new max
+        if player.health > player.max_health:
+            player.health = player.max_health
+    
     # ===== SAVE/LOAD SYSTEM =====
     
     def save_progress(self):
@@ -1330,6 +1679,8 @@ class Game:
                 'coins': self.player1.coins,
                 'owned_weapons': getattr(self.player1, 'owned_weapons', ["Fist"]),
                 'current_weapon': self.player1.weapon,
+                'owned_vehicles': getattr(self.player1, 'owned_vehicles', ["None"]),
+                'current_vehicle': self.player1.vehicle,
                 'speed': self.player1.speed,
                 'max_health': self.player1.max_health,
                 'defense': self.player1.defense
@@ -1351,15 +1702,22 @@ class Game:
             self.player1.coins = save_data.get('coins', 0)
             self.player1.owned_weapons = save_data.get('owned_weapons', ["Fist"])
             self.player1.weapon = save_data.get('current_weapon', "Fist")
+            self.player1.owned_vehicles = save_data.get('owned_vehicles', ["None"])
+            self.player1.vehicle = save_data.get('current_vehicle', "None")
             self.player1.speed = save_data.get('speed', 5)
             self.player1.max_health = save_data.get('max_health', 100)
             self.player1.defense = save_data.get('defense', 0)
             self.player1.health = self.player1.max_health
             
-            # CPU always uses same weapon as player
-            self.player2.weapon = self.player1.weapon
+            # Apply vehicle stats
+            self.apply_vehicle_stats(self.player1)
             
-            print(f"Progress loaded! Coins: {self.player1.coins}, Weapons: {self.player1.owned_weapons}")
+            # CPU always uses same weapon as player, no vehicle
+            self.player2.weapon = self.player1.weapon
+            self.player2.vehicle = "None"
+            self.apply_vehicle_stats(self.player2)
+            
+            print(f"Progress loaded! Coins: {self.player1.coins}, Weapons: {self.player1.owned_weapons}, Vehicles: {self.player1.owned_vehicles}")
             print(f"CPU weapon set to: {self.player2.weapon}")
         except FileNotFoundError:
             print("No save file found - starting fresh")
