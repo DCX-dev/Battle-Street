@@ -742,9 +742,6 @@ class Game:
         # Initialize owned weapons list
         self.player1.owned_weapons = ["Fist"]
         
-        # Load saved progress
-        self.load_progress()
-        
         # CPU or network opponent
         self.player2 = Player(SCREEN_WIDTH - 150, SCREEN_HEIGHT // 2 - 30, BLUE, {
             "left": pygame.K_a,
@@ -758,6 +755,9 @@ class Game:
         # Additional players for multiplayer
         self.all_players = [self.player1, self.player2]
         self.player_colors = [RED, BLUE, GREEN, YELLOW, PURPLE, ORANGE, CYAN, (255, 100, 150), (150, 255, 100), (255, 200, 100)]
+        
+        # Load saved progress (after both players are created)
+        self.load_progress()
         
         # Collectibles and map system
         self.collectibles = []
