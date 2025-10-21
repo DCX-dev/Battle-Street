@@ -891,18 +891,27 @@ class Game:
         self.platforms = []
         self.generate_map_platforms()
         
+    def assign_random_roles(self):
+        """Randomly assign roles to all players before battle"""
+        # All available roles (not just team-only ones for now)
+        available_roles = ["Fighter", "Engineer", "Defender", "Captain", "Ejector"]
+        
+        # Assign random role to player1
+        self.player1.role = random.choice(available_roles)
+        self.player1.build_resources = ROLES[self.player1.role].get("resources", 0)
+        print(f"🎲 {self.player1.username} assigned role: {self.player1.role}")
+        
+        # Assign random role to CPU
+        if self.is_cpu_mode and not self.is_network_game:
+            self.player2.role = random.choice(available_roles)
+            self.player2.username = "CPU"
+            self.player2.build_resources = ROLES[self.player2.role].get("resources", 0)
+            print(f"🤖 CPU assigned role: {self.player2.role}")
+    
     def reset_battle(self):
         # Apply vehicle stats to ensure size/health are correct
         self.apply_vehicle_stats(self.player1)
         self.apply_vehicle_stats(self.player2)
-        
-        # Assign CPU a random role
-        if self.is_cpu_mode and not self.is_network_game:
-            cpu_role = random.choice(["Fighter", "Engineer"])
-            self.player2.role = cpu_role
-            self.player2.username = "CPU"
-            self.player2.build_resources = ROLES[cpu_role].get("resources", 0)
-            print(f"🤖 CPU assigned role: {cpu_role}")
         
         # Reset main players
         self.player1.health = self.player1.max_health
@@ -1021,68 +1030,93 @@ class Game:
             screen.blit(error, error_rect)
     
     def draw_role_select(self):
-        # Gradient background
+        # Dramatic dark background with gradient
         for y in range(SCREEN_HEIGHT):
-            color_val = int(30 + (y / SCREEN_HEIGHT) * 50)
-            pygame.draw.line(screen, (color_val, color_val + 20, color_val), (0, y), (SCREEN_WIDTH, y))
+            color_val = int(10 + (y / SCREEN_HEIGHT) * 30)
+            pygame.draw.line(screen, (color_val, color_val + 10, color_val + 20), (0, y), (SCREEN_WIDTH, y))
         
-        # Title
-        title = title_font.render("SELECT YOUR ROLE", True, YELLOW)
-        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 100))
+        # Pulsing effect for dramatic reveal
+        pulse = abs(math.sin(pygame.time.get_ticks() * 0.003)) * 30
+        
+        # Title with glow
+        title = title_font.render("ROLE REVEAL", True, YELLOW)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 80))
+        # Glow effect
+        glow = title_font.render("ROLE REVEAL", True, (255, 255, int(100 + pulse)))
+        glow_rect = glow.get_rect(center=(SCREEN_WIDTH // 2 + 2, 82))
+        screen.blit(glow, glow_rect)
         screen.blit(title, title_rect)
         
-        # Player username display
-        username_display = text_font.render(f"Player: {self.player_username}", True, CYAN)
-        screen.blit(username_display, (20, 20))
+        # Player role reveal (center of screen)
+        role_data = ROLES[self.player1.role]
         
-        # Role cards
-        card_width = 250
-        card_height = 350
-        card_spacing = 50
-        start_x = SCREEN_WIDTH // 2 - (len(self.available_roles) * (card_width + card_spacing) - card_spacing) // 2
-        start_y = 200
+        # Large role card
+        card_width = 400
+        card_height = 400
+        card_x = SCREEN_WIDTH // 2 - card_width // 2
+        card_y = 180
         
-        for i, role_name in enumerate(self.available_roles):
-            role_data = ROLES[role_name]
-            card_x = start_x + i * (card_width + card_spacing)
-            
-            # Highlight selected role
-            if i == self.role_selection_index:
-                pygame.draw.rect(screen, YELLOW, (card_x - 10, start_y - 10, card_width + 20, card_height + 20), 5)
-            
-            # Draw card
-            pygame.draw.rect(screen, DARK_GRAY, (card_x, start_y, card_width, card_height))
-            pygame.draw.rect(screen, role_data["color"], (card_x, start_y, card_width, card_height), 4)
-            
-            # Role name
-            role_title = menu_font.render(role_name, True, role_data["color"])
-            role_title_rect = role_title.get_rect(center=(card_x + card_width // 2, start_y + 40))
-            screen.blit(role_title, role_title_rect)
-            
-            # Role description (word wrap)
-            desc_words = role_data["description"].split()
-            line = ""
-            y_offset = 100
-            for word in desc_words:
-                test_line = line + word + " "
-                if small_font.size(test_line)[0] < card_width - 20:
-                    line = test_line
-                else:
+        # Animated glow border
+        glow_size = int(10 + pulse / 3)
+        pygame.draw.rect(screen, role_data["color"], 
+                        (card_x - glow_size, card_y - glow_size, card_width + glow_size * 2, card_height + glow_size * 2), 
+                        glow_size)
+        
+        # Card background
+        pygame.draw.rect(screen, (30, 30, 40), (card_x, card_y, card_width, card_height))
+        pygame.draw.rect(screen, role_data["color"], (card_x, card_y, card_width, card_height), 5)
+        
+        # Username
+        username_text = text_font.render(self.player1.username, True, CYAN)
+        username_rect = username_text.get_rect(center=(SCREEN_WIDTH // 2, card_y + 40))
+        screen.blit(username_text, username_rect)
+        
+        # "You are..."
+        you_are_text = small_font.render("You are a...", True, LIGHT_GRAY)
+        you_are_rect = you_are_text.get_rect(center=(SCREEN_WIDTH // 2, card_y + 80))
+        screen.blit(you_are_text, you_are_rect)
+        
+        # BIG ROLE NAME
+        role_name_large = pygame.font.Font(None, 80)
+        role_text = role_name_large.render(self.player1.role.upper(), True, role_data["color"])
+        role_rect = role_text.get_rect(center=(SCREEN_WIDTH // 2, card_y + 160))
+        # Shadow
+        role_shadow = role_name_large.render(self.player1.role.upper(), True, BLACK)
+        shadow_rect = role_shadow.get_rect(center=(SCREEN_WIDTH // 2 + 3, card_y + 163))
+        screen.blit(role_shadow, shadow_rect)
+        screen.blit(role_text, role_rect)
+        
+        # Role description
+        desc_y = card_y + 240
+        desc_words = role_data["description"].split()
+        line = ""
+        for word in desc_words:
+            test_line = line + word + " "
+            if small_font.size(test_line)[0] < card_width - 40:
+                line = test_line
+            else:
+                if line:
                     desc_line = small_font.render(line, True, WHITE)
-                    screen.blit(desc_line, (card_x + 10, start_y + y_offset))
-                    line = word + " "
-                    y_offset += 30
-            if line:
-                desc_line = small_font.render(line, True, WHITE)
-                screen.blit(desc_line, (card_x + 10, start_y + y_offset))
+                    desc_rect = desc_line.get_rect(center=(SCREEN_WIDTH // 2, desc_y))
+                    screen.blit(desc_line, desc_rect)
+                    desc_y += 30
+                line = word + " "
+        if line:
+            desc_line = small_font.render(line, True, WHITE)
+            desc_rect = desc_line.get_rect(center=(SCREEN_WIDTH // 2, desc_y))
+            screen.blit(desc_line, desc_rect)
         
-        # Instructions
-        inst1 = text_font.render("← / → to select role", True, WHITE)
-        inst2 = text_font.render("ENTER to confirm", True, WHITE)
-        inst3 = text_font.render("ESC to skip (Fighter)", True, LIGHT_GRAY)
-        screen.blit(inst1, (SCREEN_WIDTH // 2 - inst1.get_width() // 2, SCREEN_HEIGHT - 120))
-        screen.blit(inst2, (SCREEN_WIDTH // 2 - inst2.get_width() // 2, SCREEN_HEIGHT - 80))
-        screen.blit(inst3, (SCREEN_WIDTH // 2 - inst3.get_width() // 2, SCREEN_HEIGHT - 40))
+        # CPU role (small display in corner)
+        if self.is_cpu_mode:
+            cpu_role_data = ROLES[self.player2.role]
+            cpu_text = tiny_font.render(f"CPU is: {self.player2.role}", True, cpu_role_data["color"])
+            screen.blit(cpu_text, (20, SCREEN_HEIGHT - 100))
+        
+        # Continue prompt (pulsing)
+        alpha = int(128 + 127 * abs(math.sin(pygame.time.get_ticks() * 0.005)))
+        continue_text = menu_font.render("Press ENTER to Begin Battle", True, (255, 255, 255, alpha))
+        continue_rect = continue_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 60))
+        screen.blit(continue_text, continue_rect)
     
     def draw_menu(self):
         # Gradient background
@@ -1613,9 +1647,11 @@ class Game:
     def handle_username_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_RETURN:
-                # Proceed to role selection if username is entered
+                # Proceed to main menu if username is entered
                 if self.player_username.strip():
-                    self.state = GameState.ROLE_SELECT
+                    self.player1.username = self.player_username
+                    print(f"✨ Welcome, {self.player_username}!")
+                    self.state = GameState.MENU
                     self.username_input_active = False
                 else:
                     self.show_username_error = True
@@ -1634,25 +1670,11 @@ class Game:
                         delattr(self, 'show_username_error')
     
     def handle_role_select_input(self, event):
+        # Role reveal screen - press any key to continue
         if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_LEFT:
-                self.role_selection_index = (self.role_selection_index - 1) % len(self.available_roles)
-            elif event.key == pygame.K_RIGHT:
-                self.role_selection_index = (self.role_selection_index + 1) % len(self.available_roles)
-            elif event.key == pygame.K_RETURN:
-                # Confirm role selection
-                self.selected_role = self.available_roles[self.role_selection_index]
-                # Apply username and role to player1
-                self.player1.username = self.player_username
-                self.player1.role = self.selected_role
-                # Apply role-specific attributes
-                self.player1.build_resources = ROLES[self.selected_role].get("resources", 0)
-                print(f"✨ {self.player_username} selected role: {self.selected_role}")
-                # Proceed to main menu
-                self.state = GameState.MENU
-            elif event.key == pygame.K_ESCAPE:
-                # Can't escape - role is required
-                pass
+            if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
+                # Continue to battle
+                self.state = GameState.BATTLE
     
     def handle_menu_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1776,9 +1798,14 @@ class Game:
                     self.player1.color = selected_color
                     print(f"Selected color: {selected_color_name}")
                     
-                    # Start battle
+                    # Assign random roles before battle
+                    self.assign_random_roles()
+                    
+                    # Show role reveal screen
+                    self.state = GameState.ROLE_SELECT
+                    
+                    # Prepare battle (but don't start yet)
                     self.reset_battle()
-                    self.state = GameState.BATTLE
                 
     def purchase_item(self):
         player = self.player1
