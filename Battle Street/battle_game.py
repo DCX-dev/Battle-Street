@@ -247,6 +247,24 @@ POWERS = {
     "Health Regen": {"effect": "regen", "duration": 240, "cost": 180, "description": "Regenerate health over time"},
 }
 
+# Cosmetics (hats, skins, visors)
+COSMETICS = {
+    # Hats
+    "Basic Cap": {"type": "hat", "cost": 50, "color": (255, 0, 0), "description": "A simple red cap"},
+    "Cool Hat": {"type": "hat", "cost": 100, "color": (0, 100, 255), "description": "A stylish blue hat"},
+    "Crown": {"type": "hat", "cost": 500, "color": (255, 215, 0), "description": "Royal gold crown"},
+    
+    # Skins
+    "Blue Skin": {"type": "skin", "cost": 75, "color": (50, 150, 255), "description": "Cool blue appearance"},
+    "Green Skin": {"type": "skin", "cost": 75, "color": (50, 255, 100), "description": "Fresh green look"},
+    "Purple Skin": {"type": "skin", "cost": 100, "color": (200, 50, 255), "description": "Mysterious purple"},
+    "Golden Skin": {"type": "skin", "cost": 1000, "color": (255, 215, 0), "description": "Legendary gold skin"},
+    
+    # Visors
+    "Cool Shades": {"type": "visor", "cost": 150, "color": (50, 50, 50), "description": "Stylish sunglasses"},
+    "Cyber Visor": {"type": "visor", "cost": 300, "color": (0, 255, 255), "description": "Futuristic visor"},
+}
+
 # Battle Maps
 MAPS = {
     "Street": {
@@ -453,6 +471,12 @@ class Player:
         self.vehicle = "None"
         self.owned_vehicles = ["None"]
         
+        # Cosmetics system
+        self.hat = None
+        self.skin = None
+        self.visor = None
+        self.owned_cosmetics = []
+        
         # Temporary buffs from collectibles
         self.temp_speed_boost = 0
         self.temp_damage_boost = 0
@@ -631,9 +655,14 @@ class Player:
         
         # Draw vehicle based on type
         if self.vehicle == "None":
+            # Determine player color (use skin if equipped, otherwise default color)
+            player_color = self.color
+            if self.skin:
+                player_color = COSMETICS[self.skin]["color"]
+            
             # Draw player body with outline
             pygame.draw.rect(screen, BLACK, (self.x - 2, self.y - 2, self.width + 4, self.height + 4))
-            pygame.draw.rect(screen, self.color, (self.x, self.y, self.width, self.height))
+            pygame.draw.rect(screen, player_color, (self.x, self.y, self.width, self.height))
             
             # Draw simple face
             eye_y = self.y + 15
@@ -643,6 +672,24 @@ class Player:
             else:
                 pygame.draw.circle(screen, WHITE, (int(self.x + 15), eye_y), 5)
                 pygame.draw.circle(screen, BLACK, (int(self.x + 15), eye_y), 2)
+            
+            # Draw visor if equipped
+            if self.visor:
+                visor_color = COSMETICS[self.visor]["color"]
+                visor_y = self.y + 12
+                pygame.draw.rect(screen, visor_color, (self.x + 8, visor_y, 24, 8))
+                pygame.draw.rect(screen, BLACK, (self.x + 8, visor_y, 24, 8), 1)
+            
+            # Draw hat if equipped
+            if self.hat:
+                hat_color = COSMETICS[self.hat]["color"]
+                hat_x = self.x + self.width // 2
+                hat_y = self.y - 5
+                # Hat brim
+                pygame.draw.ellipse(screen, hat_color, (self.x + 5, hat_y, 30, 10))
+                # Hat top
+                pygame.draw.rect(screen, hat_color, (self.x + 10, hat_y - 15, 20, 15))
+                pygame.draw.rect(screen, BLACK, (self.x + 10, hat_y - 15, 20, 15), 1)
         elif self.vehicle == "Tank":
             # Draw tank
             # Tank body
@@ -789,7 +836,9 @@ class Projectile:
 
 class Game:
     def __init__(self):
-        self.state = GameState.USERNAME_INPUT  # Start with username input
+        # Start with username input, but will skip if we have saved username
+        self.state = GameState.USERNAME_INPUT
+        self.has_saved_username = False  # Will be set in load_progress
         self.menu_selection = 0
         self.shop_selection = 0
         self.shop_scroll_offset = 0
@@ -880,6 +929,10 @@ class Game:
         
         # Load saved progress (after both players are created)
         self.load_progress()
+        
+        # If we have a saved username, skip straight to menu
+        if self.has_saved_username:
+            self.state = GameState.MENU
         
         # Collectibles and map system
         self.collectibles = []
@@ -1134,9 +1187,9 @@ class Game:
         screen.blit(title, title_rect)
         
         # Menu options with boxes
-        options = ["vs CPU", "Host LAN Game", "Join LAN Game", "Shop", "Quit"]
+        options = ["vs CPU", "Host LAN Game", "Join LAN Game", "Shop", "Customize", "Quit"]
         for i, option in enumerate(options):
-            y_pos = 240 + i * 75
+            y_pos = 220 + i * 70
             
             # Draw button background
             button_rect = pygame.Rect(SCREEN_WIDTH // 2 - 180, y_pos - 25, 360, 50)
@@ -1409,11 +1462,11 @@ class Game:
         screen.blit(title, title_rect)
         
         # Tab buttons
-        tab_names = ["WEAPONS", "VEHICLES", "POWERS"]
-        tab_width = 200
+        tab_names = ["WEAPONS", "VEHICLES", "POWERS", "COSMETICS"]
+        tab_width = 180
         tab_height = 40
         tab_y = 90
-        tab_spacing = 20
+        tab_spacing = 15
         total_tab_width = len(tab_names) * tab_width + (len(tab_names) - 1) * tab_spacing
         start_x = (SCREEN_WIDTH - total_tab_width) // 2
         
@@ -1448,8 +1501,11 @@ class Game:
             current = small_font.render(f"Weapon: {player.weapon}", True, GREEN)
         elif self.shop_tab == 1:  # Vehicles
             current = small_font.render(f"Vehicle: {VEHICLES[player.vehicle]['name']}", True, GREEN)
-        else:  # Powers
+        elif self.shop_tab == 2:  # Powers
             current = small_font.render(f"Powers: Coming Soon!", True, GREEN)
+        elif self.shop_tab == 3:  # Cosmetics
+            hat_name = player.hat if player.hat else "None"
+            current = small_font.render(f"Hat: {hat_name}", True, GREEN)
         screen.blit(current, (70, 180))
         
         # Build items list based on current tab
@@ -1465,6 +1521,9 @@ class Game:
         elif self.shop_tab == 2:  # Powers tab
             for power_name, power_data in POWERS.items():
                 items.append(("power", power_name, power_data))
+        elif self.shop_tab == 3:  # Cosmetics tab
+            for cosmetic_name, cosmetic_data in COSMETICS.items():
+                items.append(("cosmetic", cosmetic_name, cosmetic_data))
         
         # Define scrollable area
         list_start_y = 220
@@ -1651,6 +1710,7 @@ class Game:
                 if self.player_username.strip():
                     self.player1.username = self.player_username
                     print(f"✨ Welcome, {self.player_username}!")
+                    self.save_progress()  # Save the new username
                     self.state = GameState.MENU
                     self.username_input_active = False
                 else:
@@ -1660,8 +1720,13 @@ class Game:
                 if hasattr(self, 'show_username_error'):
                     delattr(self, 'show_username_error')
             elif event.key == pygame.K_ESCAPE:
-                # Can't escape - username is required
-                self.show_username_error = True
+                # Allow going back to menu if we already have a username
+                if self.has_saved_username:
+                    self.state = GameState.MENU
+                    self.username_input_active = False
+                else:
+                    # Can't escape - username is required for first time
+                    self.show_username_error = True
             elif len(self.player_username) < 15:  # Max 15 characters
                 # Only allow alphanumeric and some special characters
                 if event.unicode.isprintable() and event.unicode not in ['<', '>', '/', '\\', '|']:
@@ -1679,9 +1744,9 @@ class Game:
     def handle_menu_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_UP:
-                self.menu_selection = (self.menu_selection - 1) % 5
+                self.menu_selection = (self.menu_selection - 1) % 6
             elif event.key == pygame.K_DOWN:
-                self.menu_selection = (self.menu_selection + 1) % 5
+                self.menu_selection = (self.menu_selection + 1) % 6
             elif event.key == pygame.K_RETURN:
                 if self.menu_selection == 0:  # vs CPU
                     self.is_cpu_mode = True
@@ -1696,7 +1761,13 @@ class Game:
                     self.state = GameState.SHOP
                     self.shop_selection = 0
                     self.shop_scroll_offset = 0
-                elif self.menu_selection == 4:  # Quit
+                elif self.menu_selection == 4:  # Customize
+                    # TODO: Open customize menu (change username, etc.)
+                    print("Customize menu - Coming soon!")
+                    # For now, allow changing username
+                    self.username_input_active = True
+                    self.state = GameState.USERNAME_INPUT
+                elif self.menu_selection == 5:  # Quit
                     return False
         return True
         
@@ -1740,17 +1811,19 @@ class Game:
                 num_items = len(WEAPONS) + len(UPGRADES)
             elif self.shop_tab == 1:  # Vehicles
                 num_items = len(VEHICLES)
-            else:  # Powers
+            elif self.shop_tab == 2:  # Powers
                 num_items = len(POWERS)
+            else:  # Cosmetics
+                num_items = len(COSMETICS)
             
             if event.key == pygame.K_LEFT:
                 # Switch to previous tab
-                self.shop_tab = (self.shop_tab - 1) % 3
+                self.shop_tab = (self.shop_tab - 1) % 4
                 self.shop_selection = 0
                 self.shop_scroll_offset = 0
             elif event.key == pygame.K_RIGHT:
                 # Switch to next tab
-                self.shop_tab = (self.shop_tab + 1) % 3
+                self.shop_tab = (self.shop_tab + 1) % 4
                 self.shop_selection = 0
                 self.shop_scroll_offset = 0
             elif event.key == pygame.K_UP:
@@ -1815,8 +1888,10 @@ class Game:
             items = list(WEAPONS.items()) + list(UPGRADES.items())
         elif self.shop_tab == 1:  # Vehicles
             items = list(VEHICLES.items())
-        else:  # Powers
+        elif self.shop_tab == 2:  # Powers
             items = list(POWERS.items())
+        else:  # Cosmetics
+            items = list(COSMETICS.items())
         
         if self.shop_selection < len(items):
             item_name, item_data = items[self.shop_selection]
@@ -1867,6 +1942,16 @@ class Game:
                         print(f"Already own {item_name}")
                 elif self.shop_tab == 2:  # Powers tab
                     print("Powers are not yet implemented!")
+                elif self.shop_tab == 3:  # Cosmetics tab
+                    # It's a cosmetic - add to owned cosmetics
+                    if item_name not in player.owned_cosmetics:
+                        player.coins -= cost
+                        player.owned_cosmetics.append(item_name)
+                        print(f"Purchased {item_name}! Coins remaining: {player.coins}")
+                        print(f"Owned cosmetics: {player.owned_cosmetics}")
+                        self.save_progress()
+                    else:
+                        print(f"Already own {item_name}")
             else:
                 print(f"Not enough coins! Need {cost}, have {player.coins}")
     
@@ -1879,8 +1964,10 @@ class Game:
             items = list(WEAPONS.items()) + list(UPGRADES.items())
         elif self.shop_tab == 1:  # Vehicles
             items = list(VEHICLES.items())
-        else:  # Powers
+        elif self.shop_tab == 2:  # Powers
             items = list(POWERS.items())
+        else:  # Cosmetics
+            items = list(COSMETICS.items())
         
         if self.shop_tab == 0:  # Weapons tab
             if self.shop_selection < len(WEAPONS):
@@ -1934,8 +2021,29 @@ class Game:
                 self.save_progress()
             else:
                 print(f"Don't own {item_name} yet - buy it first!")
-        else:
+        elif self.shop_tab == 2:  # Powers tab
             print("Powers are not yet implemented!")
+        elif self.shop_tab == 3:  # Cosmetics tab
+            item_name, item_data = items[self.shop_selection]
+            
+            print(f"Attempting to equip: {item_name}")
+            
+            # Check if cosmetic is owned
+            if item_name in player.owned_cosmetics:
+                cosmetic_type = item_data["type"]
+                if cosmetic_type == "hat":
+                    player.hat = item_name
+                    print(f"Equipped hat: {item_name}!")
+                elif cosmetic_type == "skin":
+                    player.skin = item_name
+                    print(f"Equipped skin: {item_name}!")
+                elif cosmetic_type == "visor":
+                    player.visor = item_name
+                    print(f"Equipped visor: {item_name}!")
+                
+                self.save_progress()
+            else:
+                print(f"Don't own {item_name} yet - buy it first!")
     
     def give_cpu_random_upgrade(self, prefer_weapon=False):
         """Give CPU a small random balanced upgrade"""
@@ -2056,11 +2164,16 @@ class Game:
         """Save player progress to file"""
         try:
             save_data = {
+                'username': self.player1.username,
                 'coins': self.player1.coins,
                 'owned_weapons': getattr(self.player1, 'owned_weapons', ["Fist"]),
                 'current_weapon': self.player1.weapon,
                 'owned_vehicles': getattr(self.player1, 'owned_vehicles', ["None"]),
                 'current_vehicle': self.player1.vehicle,
+                'owned_cosmetics': getattr(self.player1, 'owned_cosmetics', []),
+                'hat': self.player1.hat,
+                'skin': self.player1.skin,
+                'visor': self.player1.visor,
                 'speed': self.player1.speed,
                 'max_health': self.player1.max_health,
                 'defense': self.player1.defense
@@ -2069,7 +2182,7 @@ class Game:
             with open('battle_street_save.dat', 'wb') as f:
                 pickle.dump(save_data, f)
             
-            print(f"Progress saved! Coins: {save_data['coins']}")
+            print(f"Progress saved! Username: {save_data['username']}, Coins: {save_data['coins']}")
         except Exception as e:
             print(f"Save error: {e}")
     
@@ -2079,11 +2192,26 @@ class Game:
             with open('battle_street_save.dat', 'rb') as f:
                 save_data = pickle.load(f)
             
+            # Load username if it exists
+            saved_username = save_data.get('username', '')
+            if saved_username:
+                self.player_username = saved_username
+                self.player1.username = saved_username
+                # Skip username input if we have a saved username
+                self.has_saved_username = True
+                print(f"✨ Welcome back, {saved_username}!")
+            else:
+                self.has_saved_username = False
+            
             self.player1.coins = save_data.get('coins', 0)
             self.player1.owned_weapons = save_data.get('owned_weapons', ["Fist"])
             self.player1.weapon = save_data.get('current_weapon', "Fist")
             self.player1.owned_vehicles = save_data.get('owned_vehicles', ["None"])
             self.player1.vehicle = save_data.get('current_vehicle', "None")
+            self.player1.owned_cosmetics = save_data.get('owned_cosmetics', [])
+            self.player1.hat = save_data.get('hat', None)
+            self.player1.skin = save_data.get('skin', None)
+            self.player1.visor = save_data.get('visor', None)
             self.player1.speed = save_data.get('speed', 5)
             self.player1.max_health = save_data.get('max_health', 100)
             self.player1.defense = save_data.get('defense', 0)
@@ -2100,8 +2228,10 @@ class Game:
             print(f"Progress loaded! Coins: {self.player1.coins}, Weapons: {self.player1.owned_weapons}, Vehicles: {self.player1.owned_vehicles}")
             print(f"CPU weapon set to: {self.player2.weapon}")
         except FileNotFoundError:
+            self.has_saved_username = False
             print("No save file found - starting fresh")
         except Exception as e:
+            self.has_saved_username = False
             print(f"Load error: {e}")
     
     # ===== NETWORKING METHODS =====
