@@ -789,7 +789,7 @@ class Projectile:
 
 class Game:
     def __init__(self):
-        self.state = GameState.MENU
+        self.state = GameState.USERNAME_INPUT  # Start with username input
         self.menu_selection = 0
         self.shop_selection = 0
         self.shop_scroll_offset = 0
@@ -895,6 +895,14 @@ class Game:
         # Apply vehicle stats to ensure size/health are correct
         self.apply_vehicle_stats(self.player1)
         self.apply_vehicle_stats(self.player2)
+        
+        # Assign CPU a random role
+        if self.is_cpu_mode and not self.is_network_game:
+            cpu_role = random.choice(["Fighter", "Engineer"])
+            self.player2.role = cpu_role
+            self.player2.username = "CPU"
+            self.player2.build_resources = ROLES[cpu_role].get("resources", 0)
+            print(f"🤖 CPU assigned role: {cpu_role}")
         
         # Reset main players
         self.player1.health = self.player1.max_health
@@ -1238,6 +1246,20 @@ class Game:
         for player in self.all_players:
             if player.health > 0:  # Only draw alive players
                 player.draw(screen)
+                
+                # Draw username above player
+                username_text = small_font.render(player.username, True, WHITE)
+                username_rect = username_text.get_rect(center=(player.x + player.width // 2, player.y - 30))
+                # Background for username
+                bg_rect = pygame.Rect(username_rect.x - 5, username_rect.y - 2, username_rect.width + 10, username_rect.height + 4)
+                pygame.draw.rect(screen, BLACK, bg_rect)
+                pygame.draw.rect(screen, ROLES[player.role]["color"], bg_rect, 2)
+                screen.blit(username_text, username_rect)
+                
+                # Draw role badge
+                role_text = tiny_font.render(player.role, True, ROLES[player.role]["color"])
+                role_rect = role_text.get_rect(center=(player.x + player.width // 2, player.y - 12))
+                screen.blit(role_text, role_rect)
                 
         # Draw projectiles and explosions for all players
         for player in self.all_players:
@@ -1588,6 +1610,50 @@ class Game:
         continue_text = small_font.render("Press ESC to return to menu", True, LIGHT_GRAY)
         screen.blit(continue_text, continue_text.get_rect(center=(SCREEN_WIDTH // 2, 460)))
         
+    def handle_username_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_RETURN:
+                # Proceed to role selection if username is entered
+                if self.player_username.strip():
+                    self.state = GameState.ROLE_SELECT
+                    self.username_input_active = False
+                else:
+                    self.show_username_error = True
+            elif event.key == pygame.K_BACKSPACE:
+                self.player_username = self.player_username[:-1]
+                if hasattr(self, 'show_username_error'):
+                    delattr(self, 'show_username_error')
+            elif event.key == pygame.K_ESCAPE:
+                # Can't escape - username is required
+                self.show_username_error = True
+            elif len(self.player_username) < 15:  # Max 15 characters
+                # Only allow alphanumeric and some special characters
+                if event.unicode.isprintable() and event.unicode not in ['<', '>', '/', '\\', '|']:
+                    self.player_username += event.unicode
+                    if hasattr(self, 'show_username_error'):
+                        delattr(self, 'show_username_error')
+    
+    def handle_role_select_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_LEFT:
+                self.role_selection_index = (self.role_selection_index - 1) % len(self.available_roles)
+            elif event.key == pygame.K_RIGHT:
+                self.role_selection_index = (self.role_selection_index + 1) % len(self.available_roles)
+            elif event.key == pygame.K_RETURN:
+                # Confirm role selection
+                self.selected_role = self.available_roles[self.role_selection_index]
+                # Apply username and role to player1
+                self.player1.username = self.player_username
+                self.player1.role = self.selected_role
+                # Apply role-specific attributes
+                self.player1.build_resources = ROLES[self.selected_role].get("resources", 0)
+                print(f"✨ {self.player_username} selected role: {self.selected_role}")
+                # Proceed to main menu
+                self.state = GameState.MENU
+            elif event.key == pygame.K_ESCAPE:
+                # Can't escape - role is required
+                pass
+    
     def handle_menu_input(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_UP:
@@ -3145,7 +3211,11 @@ class Game:
                 if event.type == pygame.QUIT:
                     running = False
                     
-                if self.state == GameState.MENU:
+                if self.state == GameState.USERNAME_INPUT:
+                    self.handle_username_input(event)
+                elif self.state == GameState.ROLE_SELECT:
+                    self.handle_role_select_input(event)
+                elif self.state == GameState.MENU:
                     running = self.handle_menu_input(event)
                 elif self.state == GameState.COLOR_SELECT:
                     self.handle_color_select_input(event)
@@ -3173,7 +3243,11 @@ class Game:
                     self.player1.target_x = mouse_x
                     self.player1.target_y = mouse_y
             
-            if self.state == GameState.MENU:
+            if self.state == GameState.USERNAME_INPUT:
+                self.draw_username_input()
+            elif self.state == GameState.ROLE_SELECT:
+                self.draw_role_select()
+            elif self.state == GameState.MENU:
                 self.draw_menu()
             elif self.state == GameState.COLOR_SELECT:
                 self.draw_color_select()
