@@ -12,7 +12,7 @@ a = Analysis(
     ['battle_game.py'],
     pathex=[],
     binaries=[],
-    datas=[('../weapons', 'weapons')],
+    datas=[('weapons', 'weapons')],
     hiddenimports=['pygame'],
     hookspath=[],
     hooksconfig={},
