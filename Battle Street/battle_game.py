@@ -78,12 +78,20 @@ weapon_files = {
 }
 
 for weapon_name, filename in weapon_files.items():
-    filepath = os.path.join("..", "weapons", filename)
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    filepath = os.path.join(script_dir, "weapons", filename)
+    
     if os.path.exists(filepath):
-        WEAPON_TEXTURES[weapon_name] = pygame.image.load(filepath).convert_alpha()
-        print(f"✅ Loaded {weapon_name} texture")
+        try:
+            WEAPON_TEXTURES[weapon_name] = pygame.image.load(filepath).convert_alpha()
+            print(f"✅ Loaded {weapon_name} texture from {filepath}")
+        except Exception as e:
+            print(f"❌ Error loading {weapon_name}: {e}")
+            WEAPON_TEXTURES[weapon_name] = None
     else:
         print(f"⚠️  Missing texture: {filepath}")
+        WEAPON_TEXTURES[weapon_name] = None
 
 # Fonts
 title_font = pygame.font.Font(None, 90)
@@ -104,6 +112,8 @@ class GameState:
     JOIN_GAME = 7
     COLOR_SELECT = 8
     LOBBY = 9  # Pre-game lobby where players move around
+    USERNAME_INPUT = 10  # Enter username before playing
+    ROLE_SELECT = 11  # Select role before battle
 
 # Weapon data
 WEAPONS = {
@@ -144,6 +154,46 @@ UPGRADES = {
     "Speed Boost": {"effect": "speed", "value": 2, "cost": 40},
     "Health Up": {"effect": "health", "value": 20, "cost": 60},
     "Shield": {"effect": "defense", "value": 5, "cost": 100},
+}
+
+# Roles system
+ROLES = {
+    "Engineer": {
+        "name": "Engineer",
+        "description": "Build structures and hide in vents",
+        "color": (255, 165, 0),  # Orange
+        "abilities": ["build", "vent"],
+        "resources": 100,  # Starting build resources
+        "vent_duration": 600,  # 10 seconds at 60 FPS
+        "vent_cooldown": 900,  # 15 seconds cooldown
+    },
+    "Defender": {
+        "name": "Defender",
+        "description": "Protect your team's loot (Team mode only)",
+        "color": (0, 150, 255),  # Blue
+        "abilities": ["defend"],
+        "team_only": True,
+    },
+    "Captain": {
+        "name": "Captain",
+        "description": "Lead your team and manage members (Team mode only)",
+        "color": (255, 215, 0),  # Gold
+        "abilities": ["lead", "eject"],
+        "team_only": True,
+    },
+    "Ejector": {
+        "name": "Ejector",
+        "description": "Eliminate ejected players (Team mode only)",
+        "color": (255, 0, 0),  # Red
+        "abilities": ["execute"],
+        "team_only": True,
+    },
+    "Fighter": {
+        "name": "Fighter",
+        "description": "Standard combat role",
+        "color": (150, 150, 150),  # Gray
+        "abilities": [],
+    }
 }
 
 # Vehicles
@@ -228,6 +278,49 @@ MAPS = {
         "sky_color": (60, 40, 40)
     }
 }
+
+# Platform class
+class Platform:
+    def __init__(self, x, y, width, height, color=(100, 100, 100)):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.color = color
+        
+    def draw(self, screen):
+        # Draw platform with 3D effect
+        pygame.draw.rect(screen, self.color, (self.x, self.y, self.width, self.height))
+        # Top highlight
+        pygame.draw.rect(screen, tuple(min(c + 30, 255) for c in self.color), 
+                        (self.x, self.y, self.width, 3))
+        # Bottom shadow
+        pygame.draw.rect(screen, tuple(max(c - 30, 0) for c in self.color), 
+                        (self.x, self.y + self.height - 3, self.width, 3))
+        # Side shadow
+        pygame.draw.rect(screen, tuple(max(c - 20, 0) for c in self.color), 
+                        (self.x + self.width - 3, self.y, 3, self.height))
+    
+    def check_collision(self, player, player_vy):
+        """Check if player is landing on this platform"""
+        # Player must be falling (velocity_y > 0)
+        if player_vy <= 0:
+            return False
+            
+        # Check if player is above and overlapping horizontally
+        player_bottom = player.y + player.height
+        player_left = player.x
+        player_right = player.x + player.width
+        
+        # Check horizontal overlap
+        if player_right < self.x or player_left > self.x + self.width:
+            return False
+            
+        # Check if player is landing on platform (from above)
+        if player_bottom >= self.y and player_bottom <= self.y + self.height + abs(player_vy):
+            return True
+            
+        return False
 
 # Collectible class
 class Collectible:
@@ -325,7 +418,7 @@ class ExplosionParticle:
                 pygame.draw.circle(screen, color, (int(particle['x']), int(particle['y'])), size)
 
 class Player:
-    def __init__(self, x, y, color, controls):
+    def __init__(self, x, y, color, controls, username="Player", role="Fighter"):
         self.x = x
         self.y = y
         self.width = 40
@@ -342,6 +435,19 @@ class Player:
         self.defense = 0
         self.facing_right = True
         self.shoot_cooldown = 0
+        
+        # Username and role system
+        self.username = username
+        self.role = role
+        self.is_ghost = False  # Ghost mode when defeated
+        self.team = None  # Team assignment (for team mode)
+        
+        # Role-specific attributes
+        self.build_resources = ROLES[role].get("resources", 0)  # Engineer resources
+        self.in_vent = False  # Engineer vent status
+        self.vent_timer = 0  # Time remaining in vent
+        self.vent_cooldown_timer = 0  # Cooldown before can use vent again
+        self.structures = []  # Built structures (Engineer)
         
         # Vehicle system
         self.vehicle = "None"
@@ -364,7 +470,7 @@ class Player:
         self.on_ground = False
         self.ground_y = SCREEN_HEIGHT - 180  # Stand on the sidewalk
         
-    def move(self, keys):
+    def move(self, keys, platforms=None):
         # Update temporary buffs
         if self.temp_speed_duration > 0:
             self.temp_speed_duration -= 1
@@ -418,13 +524,21 @@ class Player:
             self.velocity_y += self.gravity
             self.y += self.velocity_y
             
+            # Check platform collisions
+            self.on_ground = False
+            if platforms:
+                for platform in platforms:
+                    if platform.check_collision(self, self.velocity_y):
+                        self.y = platform.y - self.height
+                        self.velocity_y = 0
+                        self.on_ground = True
+                        break
+            
             # Ground collision
-            if self.y >= self.ground_y:
+            if not self.on_ground and self.y >= self.ground_y:
                 self.y = self.ground_y
                 self.velocity_y = 0
                 self.on_ground = True
-            else:
-                self.on_ground = False
         
         # Keep player on screen
         self.x = max(0, min(SCREEN_WIDTH - self.width, self.x))
@@ -729,6 +843,14 @@ class Game:
         self.player_colors_taken = {}  # Maps player index to color index
         self.taken_colors = []  # For CPU mode color selection
         
+        # Username and role system
+        self.player_username = ""
+        self.username_input_active = True
+        self.selected_role = "Fighter"  # Default role
+        self.role_selection_index = 0
+        self.available_roles = ["Fighter", "Engineer"]  # Start with basic roles
+        self.team_mode_enabled = False  # Toggle for team mode
+        
         # Local player (A/D to move, Space to jump)
         self.player1 = Player(100, SCREEN_HEIGHT // 2 - 30, RED, {
             "left": pygame.K_a,
@@ -764,6 +886,10 @@ class Game:
         self.current_map = "Street"  # Default map
         self.collectible_spawn_timer = 0
         self.collectible_spawn_interval = 180  # Spawn every 3 seconds
+        
+        # Platforms system
+        self.platforms = []
+        self.generate_map_platforms()
         
     def reset_battle(self):
         # Apply vehicle stats to ensure size/health are correct
@@ -802,6 +928,9 @@ class Game:
         self.current_map = random.choice(map_names)
         print(f"Battle Map: {MAPS[self.current_map]['name']}")
         
+        # Regenerate platforms for the new map
+        self.generate_map_platforms()
+        
         # If multiplayer, create additional players
         if self.is_network_game and len(self.lobby_players) > 2:
             # Clear existing additional players
@@ -836,6 +965,117 @@ class Game:
         else:
             self.all_players = [self.player1, self.player2]
         
+    def draw_username_input(self):
+        # Gradient background
+        for y in range(SCREEN_HEIGHT):
+            color_val = int(30 + (y / SCREEN_HEIGHT) * 50)
+            pygame.draw.line(screen, (color_val + 20, color_val, color_val + 30), (0, y), (SCREEN_WIDTH, y))
+        
+        # Title
+        title = title_font.render("WELCOME TO BATTLE STREET", True, YELLOW)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 150))
+        screen.blit(title, title_rect)
+        
+        # Instructions
+        inst_text = menu_font.render("Enter Your Username:", True, WHITE)
+        inst_rect = inst_text.get_rect(center=(SCREEN_WIDTH // 2, 280))
+        screen.blit(inst_text, inst_rect)
+        
+        # Username input box
+        input_box_width = 400
+        input_box_height = 60
+        input_box_x = SCREEN_WIDTH // 2 - input_box_width // 2
+        input_box_y = 350
+        
+        # Draw input box
+        pygame.draw.rect(screen, WHITE, (input_box_x, input_box_y, input_box_width, input_box_height))
+        pygame.draw.rect(screen, YELLOW, (input_box_x, input_box_y, input_box_width, input_box_height), 4)
+        
+        # Draw username text
+        username_text = text_font.render(self.player_username, True, BLACK)
+        username_rect = username_text.get_rect(midleft=(input_box_x + 15, input_box_y + input_box_height // 2))
+        screen.blit(username_text, username_rect)
+        
+        # Draw cursor if active
+        if self.username_input_active and int(pygame.time.get_ticks() / 500) % 2 == 0:
+            cursor_x = username_rect.right + 5
+            pygame.draw.line(screen, BLACK, (cursor_x, input_box_y + 15), (cursor_x, input_box_y + input_box_height - 15), 3)
+        
+        # Hint text
+        hint = small_font.render("(Required - Type your name and press ENTER)", True, LIGHT_GRAY)
+        hint_rect = hint.get_rect(center=(SCREEN_WIDTH // 2, 450))
+        screen.blit(hint, hint_rect)
+        
+        # Show error if trying to continue without username
+        if not self.player_username and hasattr(self, 'show_username_error'):
+            error = text_font.render("Username is required!", True, RED)
+            error_rect = error.get_rect(center=(SCREEN_WIDTH // 2, 520))
+            screen.blit(error, error_rect)
+    
+    def draw_role_select(self):
+        # Gradient background
+        for y in range(SCREEN_HEIGHT):
+            color_val = int(30 + (y / SCREEN_HEIGHT) * 50)
+            pygame.draw.line(screen, (color_val, color_val + 20, color_val), (0, y), (SCREEN_WIDTH, y))
+        
+        # Title
+        title = title_font.render("SELECT YOUR ROLE", True, YELLOW)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 100))
+        screen.blit(title, title_rect)
+        
+        # Player username display
+        username_display = text_font.render(f"Player: {self.player_username}", True, CYAN)
+        screen.blit(username_display, (20, 20))
+        
+        # Role cards
+        card_width = 250
+        card_height = 350
+        card_spacing = 50
+        start_x = SCREEN_WIDTH // 2 - (len(self.available_roles) * (card_width + card_spacing) - card_spacing) // 2
+        start_y = 200
+        
+        for i, role_name in enumerate(self.available_roles):
+            role_data = ROLES[role_name]
+            card_x = start_x + i * (card_width + card_spacing)
+            
+            # Highlight selected role
+            if i == self.role_selection_index:
+                pygame.draw.rect(screen, YELLOW, (card_x - 10, start_y - 10, card_width + 20, card_height + 20), 5)
+            
+            # Draw card
+            pygame.draw.rect(screen, DARK_GRAY, (card_x, start_y, card_width, card_height))
+            pygame.draw.rect(screen, role_data["color"], (card_x, start_y, card_width, card_height), 4)
+            
+            # Role name
+            role_title = menu_font.render(role_name, True, role_data["color"])
+            role_title_rect = role_title.get_rect(center=(card_x + card_width // 2, start_y + 40))
+            screen.blit(role_title, role_title_rect)
+            
+            # Role description (word wrap)
+            desc_words = role_data["description"].split()
+            line = ""
+            y_offset = 100
+            for word in desc_words:
+                test_line = line + word + " "
+                if small_font.size(test_line)[0] < card_width - 20:
+                    line = test_line
+                else:
+                    desc_line = small_font.render(line, True, WHITE)
+                    screen.blit(desc_line, (card_x + 10, start_y + y_offset))
+                    line = word + " "
+                    y_offset += 30
+            if line:
+                desc_line = small_font.render(line, True, WHITE)
+                screen.blit(desc_line, (card_x + 10, start_y + y_offset))
+        
+        # Instructions
+        inst1 = text_font.render("← / → to select role", True, WHITE)
+        inst2 = text_font.render("ENTER to confirm", True, WHITE)
+        inst3 = text_font.render("ESC to skip (Fighter)", True, LIGHT_GRAY)
+        screen.blit(inst1, (SCREEN_WIDTH // 2 - inst1.get_width() // 2, SCREEN_HEIGHT - 120))
+        screen.blit(inst2, (SCREEN_WIDTH // 2 - inst2.get_width() // 2, SCREEN_HEIGHT - 80))
+        screen.blit(inst3, (SCREEN_WIDTH // 2 - inst3.get_width() // 2, SCREEN_HEIGHT - 40))
+    
     def draw_menu(self):
         # Gradient background
         for y in range(SCREEN_HEIGHT):
@@ -986,6 +1226,10 @@ class Game:
                 pygame.draw.rect(screen, YELLOW, (i, SCREEN_HEIGHT - 65, 40, 5))
             pygame.draw.rect(screen, WHITE, (0, SCREEN_HEIGHT - 125, SCREEN_WIDTH, 3))
             pygame.draw.rect(screen, WHITE, (0, SCREEN_HEIGHT - 10, SCREEN_WIDTH, 3))
+        
+        # Draw platforms
+        for platform in self.platforms:
+            platform.draw(screen)
         
         # Draw collectibles
         for collectible in self.collectibles:
@@ -1654,6 +1898,49 @@ class Game:
         elif upgrade_type == "defense":
             cpu.defense += 2
             print(f"🛡️ CPU defense increased!")
+    
+    def generate_map_platforms(self):
+        """Generate platforms based on current map"""
+        self.platforms = []
+        
+        # Get map-specific color for platforms
+        map_data = MAPS[self.current_map]
+        ground_color = map_data["ground_color"]
+        platform_color = tuple(min(c + 20, 255) for c in ground_color)
+        
+        if self.current_map == "Street":
+            # City Street - Fire escapes and ledges
+            self.platforms.append(Platform(150, 350, 120, 15, platform_color))
+            self.platforms.append(Platform(400, 280, 150, 15, platform_color))
+            self.platforms.append(Platform(700, 350, 120, 15, platform_color))
+            self.platforms.append(Platform(250, 450, 100, 15, platform_color))
+            self.platforms.append(Platform(600, 200, 130, 15, platform_color))
+            
+        elif self.current_map == "Desert":
+            # Sandy Desert - Rock formations
+            self.platforms.append(Platform(200, 380, 140, 18, (160, 120, 80)))
+            self.platforms.append(Platform(450, 300, 120, 18, (160, 120, 80)))
+            self.platforms.append(Platform(700, 380, 140, 18, (160, 120, 80)))
+            self.platforms.append(Platform(100, 450, 100, 18, (160, 120, 80)))
+            self.platforms.append(Platform(800, 250, 110, 18, (160, 120, 80)))
+            
+        elif self.current_map == "Fields":
+            # Green Fields - Tree platforms and hills
+            self.platforms.append(Platform(180, 370, 130, 15, (100, 160, 80)))
+            self.platforms.append(Platform(420, 290, 140, 15, (100, 160, 80)))
+            self.platforms.append(Platform(680, 370, 130, 15, (100, 160, 80)))
+            self.platforms.append(Platform(300, 470, 110, 15, (100, 160, 80)))
+            self.platforms.append(Platform(550, 220, 120, 15, (100, 160, 80)))
+            
+        elif self.current_map == "Arena":
+            # Battle Arena - Stone pillars and ledges
+            self.platforms.append(Platform(170, 360, 130, 20, (110, 80, 80)))
+            self.platforms.append(Platform(410, 270, 160, 20, (110, 80, 80)))
+            self.platforms.append(Platform(710, 360, 130, 20, (110, 80, 80)))
+            self.platforms.append(Platform(50, 440, 120, 20, (110, 80, 80)))
+            self.platforms.append(Platform(820, 440, 120, 20, (110, 80, 80)))
+            self.platforms.append(Platform(300, 190, 140, 20, (110, 80, 80)))
+            self.platforms.append(Platform(550, 190, 140, 20, (110, 80, 80)))
     
     def apply_vehicle_stats(self, player):
         """Apply vehicle stats to a player (health, size, etc.)"""
@@ -2588,14 +2875,14 @@ class Game:
         # In network mode, only move YOUR player (based on my_player_index)
         if self.is_network_game and self.my_player_index < len(self.all_players):
             my_player = self.all_players[self.my_player_index]
-            my_player.move(keys)
+            my_player.move(keys, self.platforms)
             # Handle jump separately (W key for jump, not Space which is for shooting)
             if keys[pygame.K_w] and my_player.on_ground:
                 my_player.velocity_y = my_player.jump_power
                 my_player.on_ground = False
         else:
             # CPU mode - move player1
-            self.player1.move(keys)
+            self.player1.move(keys, self.platforms)
             # Handle jump with W
             if keys[pygame.K_w] and self.player1.on_ground:
                 self.player1.velocity_y = self.player1.jump_power
@@ -2629,8 +2916,18 @@ class Game:
             self.collectible_spawn_timer = 0
             # Spawn a random collectible
             collectible_type = random.choice(["coin", "coin", "health", "speed", "damage"])  # More coins
-            x = random.randint(100, SCREEN_WIDTH - 100)
-            y = random.randint(100, SCREEN_HEIGHT - 250)
+            
+            # 50% chance to spawn on a platform, 50% chance to spawn in air
+            if self.platforms and random.random() < 0.5:
+                # Spawn on a random platform
+                platform = random.choice(self.platforms)
+                x = random.randint(int(platform.x + 20), int(platform.x + platform.width - 20))
+                y = platform.y - 30  # Slightly above the platform
+            else:
+                # Spawn randomly in the air
+                x = random.randint(100, SCREEN_WIDTH - 100)
+                y = random.randint(100, SCREEN_HEIGHT - 250)
+            
             self.collectibles.append(Collectible(x, y, collectible_type))
         
         # Update collectibles
@@ -2721,13 +3018,20 @@ class Game:
         cpu.velocity_y += cpu.gravity
         cpu.y += cpu.velocity_y
         
+        # Check platform collisions for CPU
+        cpu.on_ground = False
+        for platform in self.platforms:
+            if platform.check_collision(cpu, cpu.velocity_y):
+                cpu.y = platform.y - cpu.height
+                cpu.velocity_y = 0
+                cpu.on_ground = True
+                break
+        
         # Ground collision for CPU
-        if cpu.y >= cpu.ground_y:
+        if not cpu.on_ground and cpu.y >= cpu.ground_y:
             cpu.y = cpu.ground_y
             cpu.velocity_y = 0
             cpu.on_ground = True
-        else:
-            cpu.on_ground = False
         
         # Get CPU center position
         cpu_center_x = cpu.x + cpu.width // 2
@@ -2741,21 +3045,52 @@ class Game:
         # Strategy timer for movement patterns
         self.cpu_strategy_timer += 1
         
+        # Check if CPU should jump onto a platform to reach the player or get better position
+        should_jump_for_platform = False
+        if cpu.on_ground:
+            # Check if player is on a platform above CPU
+            if target_center_y < cpu_center_y - 50:  # Player is significantly higher
+                # Find if there's a platform nearby that CPU could jump to
+                for platform in self.platforms:
+                    platform_center_x = platform.x + platform.width / 2
+                    horizontal_dist_to_platform = abs(cpu_center_x - platform_center_x)
+                    
+                    # Platform is near CPU horizontally and above CPU
+                    if horizontal_dist_to_platform < 100 and platform.y < cpu.y and platform.y > cpu.y - 150:
+                        # Check if platform is between CPU and target or helps get to target
+                        if abs(platform_center_x - target_center_x) < abs(cpu_center_x - target_center_x):
+                            should_jump_for_platform = True
+                            # Move towards platform
+                            if cpu_center_x < platform_center_x:
+                                cpu.x += cpu.speed * 0.8
+                                cpu.facing_right = True
+                            else:
+                                cpu.x -= cpu.speed * 0.8
+                                cpu.facing_right = False
+                            
+                            # Jump when close enough to platform edge
+                            if horizontal_dist_to_platform < 50:
+                                cpu.velocity_y = cpu.jump_power
+                                cpu.on_ground = False
+                                print("CPU jumping to platform!")
+                            break
+        
         # Moderate dodging - sometimes jump over projectiles
         dodging = False
-        for proj in target.projectiles:
-            # Check if projectile is heading toward CPU at ground level
-            dist_to_proj = abs(proj.x - cpu_center_x)
-            
-            # Jump to dodge if projectile is close and CPU is on ground (35% chance)
-            if dist_to_proj < 150 and abs(proj.y - cpu_center_y) < 80 and cpu.on_ground and random.random() < 0.35:
-                cpu.velocity_y = cpu.jump_power
-                cpu.on_ground = False
-                dodging = True
-                print("CPU jumping to dodge!")
-                break
+        if not should_jump_for_platform:
+            for proj in target.projectiles:
+                # Check if projectile is heading toward CPU at ground level
+                dist_to_proj = abs(proj.x - cpu_center_x)
+                
+                # Jump to dodge if projectile is close and CPU is on ground (35% chance)
+                if dist_to_proj < 150 and abs(proj.y - cpu_center_y) < 80 and cpu.on_ground and random.random() < 0.35:
+                    cpu.velocity_y = cpu.jump_power
+                    cpu.on_ground = False
+                    dodging = True
+                    print("CPU jumping to dodge!")
+                    break
         
-        if not dodging:
+        if not dodging and not should_jump_for_platform:
             # Moderate horizontal movement
             ideal_distance = 250  # Optimal shooting distance
             
