@@ -114,6 +114,7 @@ class GameState:
     LOBBY = 9  # Pre-game lobby where players move around
     USERNAME_INPUT = 10  # Enter username before playing
     ROLE_SELECT = 11  # Select role before battle
+    CUSTOMIZE = 12  # Customize menu (username, hats, skins, visors)
 
 # Weapon data
 WEAPONS = {
@@ -193,6 +194,14 @@ ROLES = {
         "description": "Standard combat role",
         "color": (150, 150, 150),  # Gray
         "abilities": [],
+    },
+    "Trapper": {
+        "name": "Trapper",
+        "description": "Trap enemies in cages for 7 seconds",
+        "color": (128, 0, 128),  # Purple
+        "abilities": ["trap", "cage"],
+        "trap_duration": 420,  # 7 seconds at 60 FPS
+        "trap_cooldown": 600,  # 10 seconds cooldown
     }
 }
 
@@ -466,6 +475,13 @@ class Player:
         self.vent_timer = 0  # Time remaining in vent
         self.vent_cooldown_timer = 0  # Cooldown before can use vent again
         self.structures = []  # Built structures (Engineer)
+        
+        # Trapper attributes
+        self.is_trapped = False  # If player is trapped in cage
+        self.trap_timer = 0  # Time remaining in trap
+        self.trap_cooldown_timer = 0  # Cooldown before can trap again
+        self.cage_x = 0  # Position of cage
+        self.cage_y = 0
         
         # Vehicle system
         self.vehicle = "None"
@@ -899,6 +915,15 @@ class Game:
         self.role_selection_index = 0
         self.available_roles = ["Fighter", "Engineer"]  # Start with basic roles
         self.team_mode_enabled = False  # Toggle for team mode
+        self.num_teams = 2  # Number of teams in team mode (2-7)
+        self.team_size = 4  # Players per team
+        
+        # Customize menu system
+        self.customize_tab = 0  # 0=Username, 1=Hats, 2=Skins, 3=Visors
+        self.customize_selection = 0
+        
+        # Engineer inventory
+        self.wood_inventory = 10  # Starting wood for engineers
         
         # Local player (A/D to move, Space to jump)
         self.player1 = Player(100, SCREEN_HEIGHT // 2 - 30, RED, {
@@ -1001,8 +1026,11 @@ class Game:
         # Regenerate platforms for the new map
         self.generate_map_platforms()
         
+        # Team mode: spawn CPU teammates
+        if self.team_mode_enabled and self.is_cpu_mode:
+            self.spawn_teams()
         # If multiplayer, create additional players
-        if self.is_network_game and len(self.lobby_players) > 2:
+        elif self.is_network_game and len(self.lobby_players) > 2:
             # Clear existing additional players
             self.all_players = [self.player1, self.player2]
             
@@ -1035,6 +1063,79 @@ class Game:
         else:
             self.all_players = [self.player1, self.player2]
         
+    def spawn_teams(self):
+        """Spawn CPU teammates and enemy teams for team mode"""
+        self.all_players = []
+        
+        # Team colors for visual distinction
+        team_colors = [
+            (255, 50, 50),   # Red team
+            (50, 50, 255),   # Blue team
+            (50, 255, 50),   # Green team
+            (255, 255, 50),  # Yellow team
+            (255, 128, 0),   # Orange team
+            (128, 0, 255),   # Purple team
+            (0, 255, 255),   # Cyan team
+        ]
+        
+        # Determine team composition
+        total_players = self.num_teams * self.team_size
+        
+        # Roles that must be on each team
+        required_roles = ["Engineer", "Captain"]
+        optional_roles = ["Fighter", "Fighter", "Ejector"]  # For a team of 5+
+        
+        for team_num in range(self.num_teams):
+            team_color = team_colors[team_num % len(team_colors)]
+            
+            # Assign roles for this team
+            team_roles = required_roles.copy()
+            remaining_slots = self.team_size - len(required_roles)
+            
+            # Fill remaining slots with varied roles
+            for i in range(remaining_slots):
+                if i == 0 and self.team_size >= 4:
+                    team_roles.append("Trapper")
+                elif i == 1 and self.team_size >= 5:
+                    team_roles.append("Ejector")
+                else:
+                    team_roles.append("Fighter")
+            
+            # Create players for this team
+            for player_idx in range(self.team_size):
+                # Position players spread out on their side
+                if team_num == 0:  # Player's team (left side)
+                    base_x = 100 + player_idx * 80
+                    base_y = 300 + (player_idx % 3) * 100
+                else:  # Enemy teams (right side and varied positions)
+                    base_x = SCREEN_WIDTH - 200 - player_idx * 80
+                    base_y = 200 + (player_idx % 3) * 120
+                
+                role = team_roles[player_idx % len(team_roles)]
+                
+                # First player in team 0 is the human player
+                if team_num == 0 and player_idx == 0:
+                    # Update player1 with team info
+                    self.player1.team = team_num
+                    self.player1.role = role
+                    self.player1.color = team_color
+                    self.player1.build_resources = ROLES[role].get("resources", 0)
+                    self.all_players.append(self.player1)
+                else:
+                    # Create CPU player
+                    cpu_player = Player(
+                        base_x, base_y, team_color,
+                        {"left": pygame.K_a, "right": pygame.K_d, "jump": pygame.K_SPACE, "up": pygame.K_SPACE, "down": pygame.K_s, "shoot": pygame.K_SPACE},
+                        username=f"CPU-{team_num}-{player_idx}",
+                        role=role
+                    )
+                    cpu_player.team = team_num
+                    cpu_player.weapon = self.player1.weapon  # Same weapon as player
+                    self.all_players.append(cpu_player)
+        
+        print(f"🎮 Team Mode: {self.num_teams} teams with {self.team_size} players each")
+        print(f"👤 Your team: Team {self.player1.team} ({self.player1.role})")
+    
     def draw_username_input(self):
         # Gradient background
         for y in range(SCREEN_HEIGHT):
@@ -1329,10 +1430,70 @@ class Game:
         # Draw collectibles
         for collectible in self.collectibles:
             collectible.draw(screen)
+        
+        # Draw Engineer barriers
+        for player in self.all_players:
+            if player.role == "Engineer":
+                for structure in player.structures:
+                    if structure["type"] == "barrier":
+                        # Draw wooden barrier
+                        pygame.draw.rect(screen, (139, 69, 19), (structure["x"], structure["y"], structure["width"], structure["height"]))
+                        pygame.draw.rect(screen, (101, 67, 33), (structure["x"], structure["y"], structure["width"], structure["height"]), 3)
+                        # Health bar on barrier
+                        health_ratio = structure["health"] / 50
+                        pygame.draw.rect(screen, RED, (structure["x"], structure["y"] - 10, structure["width"], 5))
+                        pygame.draw.rect(screen, GREEN, (structure["x"], structure["y"] - 10, structure["width"] * health_ratio, 5))
+        
+        # Draw trapped player cages
+        for player in self.all_players:
+            if player.is_trapped:
+                # Draw cage bars
+                cage_width = player.width + 20
+                cage_height = player.height + 30
+                cage_x = player.cage_x - 10
+                cage_y = player.cage_y - 15
+                
+                # Cage background
+                pygame.draw.rect(screen, (50, 50, 50, 100), (cage_x, cage_y, cage_width, cage_height))
+                
+                # Vertical bars
+                for i in range(5):
+                    bar_x = cage_x + i * (cage_width // 4)
+                    pygame.draw.rect(screen, (80, 80, 80), (bar_x, cage_y, 5, cage_height))
+                
+                # Horizontal bars
+                for i in range(4):
+                    bar_y = cage_y + i * (cage_height // 3)
+                    pygame.draw.rect(screen, (80, 80, 80), (cage_x, bar_y, cage_width, 5))
+                
+                # Timer display
+                time_left = player.trap_timer / 60  # Convert to seconds
+                timer_text = tiny_font.render(f"{time_left:.1f}s", True, RED)
+                screen.blit(timer_text, (player.cage_x, player.cage_y - 35))
          
         for player in self.all_players:
-            if player.health > 0:  # Only draw alive players
-                player.draw(screen)
+            # Ghost mode: only draw if alive OR if viewer is also dead/ghost
+            should_draw = False
+            if player.health > 0:
+                should_draw = True  # Alive players always visible
+            elif self.team_mode_enabled and player.is_ghost:
+                # Ghosts only visible to other dead players (or themselves)
+                if self.player1.is_ghost or player == self.player1:
+                    should_draw = True
+            
+            if should_draw:
+                # Draw with transparency if ghost
+                if player.is_ghost:
+                    # Create semi-transparent surface
+                    ghost_surface = pygame.Surface((player.width, player.height), pygame.SRCALPHA)
+                    ghost_surface.fill((*player.color, 100))  # 100 = semi-transparent
+                    screen.blit(ghost_surface, (player.x, player.y))
+                    
+                    # Draw ghost label
+                    ghost_text = tiny_font.render("👻 GHOST", True, (150, 150, 255))
+                    screen.blit(ghost_text, (player.x, player.y - 50))
+                else:
+                    player.draw(screen)
                 
                 # Draw username above player
                 username_text = small_font.render(player.username, True, WHITE)
@@ -1381,6 +1542,27 @@ class Game:
         
         p2_weapon = small_font.render(f"Weapon: {self.player2.weapon}", True, WHITE)
         screen.blit(p2_weapon, (SCREEN_WIDTH - 240, 45))
+        
+        # Engineer wood inventory and buy button
+        if self.player1.role == "Engineer":
+            button_x = SCREEN_WIDTH - 180
+            button_y = 100
+            button_width = 160
+            button_height = 60
+            
+            # Draw button background
+            pygame.draw.rect(screen, (80, 50, 20), (button_x, button_y, button_width, button_height))
+            pygame.draw.rect(screen, YELLOW, (button_x, button_y, button_width, button_height), 3)
+            
+            # Wood inventory display
+            wood_text = small_font.render(f"Wood: {int(self.player1.build_resources)}", True, WHITE)
+            screen.blit(wood_text, (button_x + 10, button_y + 8))
+            
+            # Buy button text
+            buy_text = tiny_font.render("Press B: Buy Wood", True, YELLOW)
+            screen.blit(buy_text, (button_x + 10, button_y + 32))
+            cost_text = tiny_font.render("(25 coins)", True, LIGHT_GRAY)
+            screen.blit(cost_text, (button_x + 35, button_y + 48))
         
         # Draw controls at bottom with background
         pygame.draw.rect(screen, (0, 0, 0, 128), (0, SCREEN_HEIGHT - 40, SCREEN_WIDTH, 40))
@@ -1599,6 +1781,27 @@ class Game:
                         True, text_color
                     )
                     screen.blit(stats_text, (70, y_pos + 32))
+                elif item_type == "cosmetic":
+                    # Check if cosmetic is owned/equipped
+                    is_owned = item_name in player.owned_cosmetics
+                    cosmetic_type = item_data['type']
+                    is_equipped = False
+                    if cosmetic_type == "hat":
+                        is_equipped = player.hat == item_name
+                    elif cosmetic_type == "skin":
+                        is_equipped = player.skin == item_name
+                    elif cosmetic_type == "visor":
+                        is_equipped = player.visor == item_name
+                    
+                    status = " [EQUIPPED]" if is_equipped else (" [OWNED]" if is_owned else "")
+                    name_text = small_font.render(f"{item_name}{status}", True, text_color)
+                    screen.blit(name_text, (70, y_pos + 5))
+                    
+                    stats_text = tiny_font.render(
+                        f"{item_data['type'].title()} - {item_data['description']} | Cost: {item_data['cost']} coins",
+                        True, text_color
+                    )
+                    screen.blit(stats_text, (70, y_pos + 32))
                 else:  # upgrade
                     name_text = small_font.render(f"{item_name}", True, text_color)
                     screen.blit(name_text, (70, y_pos + 5))
@@ -1734,6 +1937,229 @@ class Game:
                     if hasattr(self, 'show_username_error'):
                         delattr(self, 'show_username_error')
     
+    def draw_customize(self):
+        # Gradient background
+        for y in range(SCREEN_HEIGHT):
+            color_val = int(30 + (y / SCREEN_HEIGHT) * 50)
+            pygame.draw.line(screen, (color_val + 10, color_val + 30, color_val + 10), (0, y), (SCREEN_WIDTH, y))
+        
+        # Title
+        title = title_font.render("CUSTOMIZE", True, YELLOW)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 50))
+        screen.blit(title, title_rect)
+        
+        # Tab buttons
+        tab_names = ["USERNAME", "HATS", "SKINS", "VISORS"]
+        tab_width = 180
+        tab_height = 40
+        tab_y = 110
+        tab_spacing = 20
+        total_width = len(tab_names) * tab_width + (len(tab_names) - 1) * tab_spacing
+        start_x = (SCREEN_WIDTH - total_width) // 2
+        
+        for i, tab_name in enumerate(tab_names):
+            tab_x = start_x + i * (tab_width + tab_spacing)
+            tab_rect = pygame.Rect(tab_x, tab_y, tab_width, tab_height)
+            
+            if i == self.customize_tab:
+                pygame.draw.rect(screen, YELLOW, tab_rect)
+                tab_color = BLACK
+                pygame.draw.rect(screen, WHITE, tab_rect, 3)
+            else:
+                pygame.draw.rect(screen, DARK_GRAY, tab_rect)
+                tab_color = WHITE
+                pygame.draw.rect(screen, LIGHT_GRAY, tab_rect, 2)
+            
+            tab_text = small_font.render(tab_name, True, tab_color)
+            tab_text_rect = tab_text.get_rect(center=(tab_x + tab_width // 2, tab_y + tab_height // 2))
+            screen.blit(tab_text, tab_text_rect)
+        
+        # Content area
+        content_y = 180
+        
+        if self.customize_tab == 0:  # Username
+            # Username editing
+            inst = menu_font.render("Change Your Username:", True, WHITE)
+            inst_rect = inst.get_rect(center=(SCREEN_WIDTH // 2, content_y))
+            screen.blit(inst, inst_rect)
+            
+            # Input box
+            input_box_width = 400
+            input_box_height = 60
+            input_box_x = SCREEN_WIDTH // 2 - input_box_width // 2
+            input_box_y = content_y + 70
+            
+            pygame.draw.rect(screen, WHITE, (input_box_x, input_box_y, input_box_width, input_box_height))
+            pygame.draw.rect(screen, YELLOW, (input_box_x, input_box_y, input_box_width, input_box_height), 4)
+            
+            username_text = text_font.render(self.player_username, True, BLACK)
+            username_rect = username_text.get_rect(midleft=(input_box_x + 15, input_box_y + input_box_height // 2))
+            screen.blit(username_text, username_rect)
+            
+            # Cursor
+            if int(pygame.time.get_ticks() / 500) % 2 == 0:
+                cursor_x = username_rect.right + 5
+                pygame.draw.line(screen, BLACK, (cursor_x, input_box_y + 15), (cursor_x, input_box_y + input_box_height - 15), 3)
+            
+            hint = small_font.render("Type to edit, ENTER to save", True, LIGHT_GRAY)
+            screen.blit(hint, (SCREEN_WIDTH // 2 - hint.get_width() // 2, input_box_y + 80))
+            
+        else:  # Hats, Skins, or Visors
+            # Filter cosmetics by type
+            cosmetic_type_map = {1: "hat", 2: "skin", 3: "visor"}
+            filter_type = cosmetic_type_map[self.customize_tab]
+            
+            filtered_cosmetics = [(name, data) for name, data in COSMETICS.items() if data['type'] == filter_type]
+            
+            if not filtered_cosmetics:
+                no_items = text_font.render("No items in this category", True, WHITE)
+                screen.blit(no_items, (SCREEN_WIDTH // 2 - no_items.get_width() // 2, content_y + 100))
+            else:
+                # Display cosmetics as cards
+                card_width = 200
+                card_height = 220
+                cards_per_row = 4
+                card_spacing = 20
+                start_x = (SCREEN_WIDTH - (cards_per_row * card_width + (cards_per_row - 1) * card_spacing)) // 2
+                
+                for idx, (cosmetic_name, cosmetic_data) in enumerate(filtered_cosmetics):
+                    row = idx // cards_per_row
+                    col = idx % cards_per_row
+                    
+                    card_x = start_x + col * (card_width + card_spacing)
+                    card_y = content_y + row * (card_height + card_spacing)
+                    
+                    # Check if owned/equipped
+                    is_owned = cosmetic_name in self.player1.owned_cosmetics
+                    is_equipped = False
+                    if filter_type == "hat":
+                        is_equipped = self.player1.hat == cosmetic_name
+                    elif filter_type == "skin":
+                        is_equipped = self.player1.skin == cosmetic_name
+                    elif filter_type == "visor":
+                        is_equipped = self.player1.visor == cosmetic_name
+                    
+                    # Highlight selected
+                    if idx == self.customize_selection:
+                        pygame.draw.rect(screen, YELLOW, (card_x - 5, card_y - 5, card_width + 10, card_height + 10), 4)
+                    
+                    # Card background
+                    if is_equipped:
+                        pygame.draw.rect(screen, (50, 100, 50), (card_x, card_y, card_width, card_height))
+                    elif is_owned:
+                        pygame.draw.rect(screen, (50, 50, 80), (card_x, card_y, card_width, card_height))
+                    else:
+                        pygame.draw.rect(screen, (40, 40, 50), (card_x, card_y, card_width, card_height))
+                    
+                    pygame.draw.rect(screen, cosmetic_data['color'], (card_x, card_y, card_width, card_height), 3)
+                    
+                    # Item name
+                    name_text = small_font.render(cosmetic_name, True, cosmetic_data['color'])
+                    name_rect = name_text.get_rect(center=(card_x + card_width // 2, card_y + 30))
+                    screen.blit(name_text, name_rect)
+                    
+                    # Status
+                    if is_equipped:
+                        status_text = tiny_font.render("[EQUIPPED]", True, GREEN)
+                    elif is_owned:
+                        status_text = tiny_font.render("[OWNED]", True, CYAN)
+                    else:
+                        status_text = tiny_font.render(f"{cosmetic_data['cost']} coins", True, YELLOW)
+                    status_rect = status_text.get_rect(center=(card_x + card_width // 2, card_y + 60))
+                    screen.blit(status_text, status_rect)
+                    
+                    # Preview (color square)
+                    preview_size = 60
+                    preview_x = card_x + card_width // 2 - preview_size // 2
+                    preview_y = card_y + 90
+                    pygame.draw.rect(screen, cosmetic_data['color'], (preview_x, preview_y, preview_size, preview_size))
+                    pygame.draw.rect(screen, WHITE, (preview_x, preview_y, preview_size, preview_size), 2)
+                    
+                    # Description
+                    desc = tiny_font.render(cosmetic_data['description'][:25], True, WHITE)
+                    desc_rect = desc.get_rect(center=(card_x + card_width // 2, card_y + 175))
+                    screen.blit(desc, desc_rect)
+        
+        # Instructions
+        inst_bg = pygame.Rect(0, SCREEN_HEIGHT - 60, SCREEN_WIDTH, 60)
+        pygame.draw.rect(screen, (20, 20, 30), inst_bg)
+        
+        if self.customize_tab == 0:
+            inst = small_font.render("←→: Switch Tab | Type to edit | ENTER: Save | ESC: Back to Menu", True, WHITE)
+        else:
+            inst = small_font.render("←→: Switch Tab | ↑↓←→: Navigate | B: Buy | E: Equip | ESC: Back to Menu", True, WHITE)
+        screen.blit(inst, (SCREEN_WIDTH // 2 - inst.get_width() // 2, SCREEN_HEIGHT - 30))
+    
+    def handle_customize_input(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                # Return to menu
+                self.state = GameState.MENU
+            elif event.key == pygame.K_LEFT:
+                self.customize_tab = (self.customize_tab - 1) % 4
+                self.customize_selection = 0
+            elif event.key == pygame.K_RIGHT:
+                self.customize_tab = (self.customize_tab + 1) % 4
+                self.customize_selection = 0
+            
+            # Handle based on tab
+            if self.customize_tab == 0:  # Username editing
+                if event.key == pygame.K_RETURN:
+                    if self.player_username.strip():
+                        self.player1.username = self.player_username
+                        self.save_progress()
+                        print(f"✅ Username updated to: {self.player_username}")
+                elif event.key == pygame.K_BACKSPACE:
+                    self.player_username = self.player_username[:-1]
+                elif len(self.player_username) < 15:
+                    if event.unicode.isprintable() and event.unicode not in ['<', '>', '/', '\\', '|']:
+                        self.player_username += event.unicode
+            else:  # Cosmetics tabs
+                cosmetic_type_map = {1: "hat", 2: "skin", 3: "visor"}
+                filter_type = cosmetic_type_map[self.customize_tab]
+                filtered_cosmetics = [(name, data) for name, data in COSMETICS.items() if data['type'] == filter_type]
+                
+                if filtered_cosmetics:
+                    num_items = len(filtered_cosmetics)
+                    
+                    if event.key == pygame.K_UP:
+                        self.customize_selection = (self.customize_selection - 4) % num_items
+                    elif event.key == pygame.K_DOWN:
+                        self.customize_selection = (self.customize_selection + 4) % num_items
+                    elif event.key == pygame.K_LEFT and self.customize_tab != 0:
+                        self.customize_selection = max(0, self.customize_selection - 1)
+                    elif event.key == pygame.K_RIGHT and self.customize_tab != 0:
+                        self.customize_selection = min(num_items - 1, self.customize_selection + 1)
+                    elif event.key == pygame.K_b:
+                        # Buy cosmetic
+                        if self.customize_selection < num_items:
+                            cosmetic_name, cosmetic_data = filtered_cosmetics[self.customize_selection]
+                            if cosmetic_name not in self.player1.owned_cosmetics:
+                                if self.player1.coins >= cosmetic_data['cost']:
+                                    self.player1.coins -= cosmetic_data['cost']
+                                    self.player1.owned_cosmetics.append(cosmetic_name)
+                                    self.save_progress()
+                                    print(f"✅ Purchased {cosmetic_name}!")
+                                else:
+                                    print(f"❌ Not enough coins! Need {cosmetic_data['cost']}, have {self.player1.coins}")
+                            else:
+                                print(f"Already own {cosmetic_name}")
+                    elif event.key == pygame.K_e:
+                        # Equip cosmetic
+                        if self.customize_selection < num_items:
+                            cosmetic_name, cosmetic_data = filtered_cosmetics[self.customize_selection]
+                            if cosmetic_name in self.player1.owned_cosmetics:
+                                if filter_type == "hat":
+                                    self.player1.hat = cosmetic_name
+                                elif filter_type == "skin":
+                                    self.player1.skin = cosmetic_name
+                                elif filter_type == "visor":
+                                    self.player1.visor = cosmetic_name
+                                self.save_progress()
+                                print(f"✅ Equipped {cosmetic_name}!")
+                            else:
+                                print(f"❌ Don't own {cosmetic_name} yet!")
+    
     def handle_role_select_input(self, event):
         # Role reveal screen - press any key to continue
         if event.type == pygame.KEYDOWN:
@@ -1762,11 +2188,10 @@ class Game:
                     self.shop_selection = 0
                     self.shop_scroll_offset = 0
                 elif self.menu_selection == 4:  # Customize
-                    # TODO: Open customize menu (change username, etc.)
-                    print("Customize menu - Coming soon!")
-                    # For now, allow changing username
-                    self.username_input_active = True
-                    self.state = GameState.USERNAME_INPUT
+                    # Open customize menu
+                    self.customize_tab = 0
+                    self.customize_selection = 0
+                    self.state = GameState.CUSTOMIZE
                 elif self.menu_selection == 5:  # Quit
                     return False
         return True
@@ -1792,8 +2217,18 @@ class Game:
             if event.key == pygame.K_ESCAPE:
                 self.network_running = False  # Stop network sync
                 self.state = GameState.MENU
+            elif event.key == pygame.K_b and self.player1.role == "Engineer":
+                # Buy wood for Engineer
+                wood_cost = 25
+                if self.player1.coins >= wood_cost:
+                    self.player1.coins -= wood_cost
+                    self.player1.build_resources += 10
+                    print(f"✅ Purchased 10 wood! Total: {int(self.player1.build_resources)}")
+                    self.save_progress()
+                else:
+                    print(f"❌ Not enough coins! Need {wood_cost}, have {self.player1.coins}")
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:  # Left mouse click
+            if event.button == 1:  # Left mouse click - shoot
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 
                 # Shoot with YOUR player (based on player index)
@@ -1803,6 +2238,38 @@ class Game:
                 else:
                     # CPU mode - player1 shoots
                     self.player1.shoot(mouse_x, mouse_y)
+                    
+            elif event.button == 3:  # Right mouse click - Engineer build
+                if self.player1.role == "Engineer" and self.player1.build_resources >= 10:
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    # Build a defensive structure (barrier)
+                    structure = {
+                        "type": "barrier",
+                        "x": mouse_x - 25,
+                        "y": mouse_y - 50,
+                        "width": 50,
+                        "height": 100,
+                        "health": 50
+                    }
+                    self.player1.structures.append(structure)
+                    self.player1.build_resources -= 10
+                    print(f"🔨 Built barrier! Resources left: {int(self.player1.build_resources)}")
+                elif self.player1.role == "Trapper" and self.player1.trap_cooldown_timer <= 0:
+                    # Trap nearest enemy
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    # Find enemy near click position
+                    for enemy in self.all_players:
+                        if enemy != self.player1 and enemy.health > 0 and enemy.team != self.player1.team:
+                            dist = ((enemy.x - mouse_x)**2 + (enemy.y - mouse_y)**2)**0.5
+                            if dist < 100 and not enemy.is_trapped:
+                                # Trap the enemy!
+                                enemy.is_trapped = True
+                                enemy.trap_timer = ROLES["Trapper"]["trap_duration"]
+                                enemy.cage_x = enemy.x
+                                enemy.cage_y = enemy.y
+                                self.player1.trap_cooldown_timer = ROLES["Trapper"]["trap_cooldown"]
+                                print(f"🪤 Trapped {enemy.username} for 7 seconds!")
+                                break
                 
     def handle_shop_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1862,6 +2329,10 @@ class Game:
                 self.selected_color_index = (self.selected_color_index - 1) % len(self.available_colors)
             elif event.key == pygame.K_RIGHT:
                 self.selected_color_index = (self.selected_color_index + 1) % len(self.available_colors)
+            elif event.key == pygame.K_t:
+                # Toggle team mode
+                self.team_mode_enabled = not self.team_mode_enabled
+                print(f"Team Mode: {'ENABLED' if self.team_mode_enabled else 'DISABLED'}")
             elif event.key == pygame.K_RETURN:
                 # Apply selected color
                 selected_color_name, selected_color = self.available_colors[self.selected_color_index]
@@ -2744,8 +3215,25 @@ class Game:
             name_text = small_font.render(color_name, True, WHITE)
             screen.blit(name_text, name_text.get_rect(center=(color_x + 50, color_y2 + 120)))
         
+        # Team Mode Checkbox
+        checkbox_y = 540
+        checkbox_size = 30
+        checkbox_x = SCREEN_WIDTH // 2 - 150
+        checkbox_rect = pygame.Rect(checkbox_x, checkbox_y, checkbox_size, checkbox_size)
+        
+        # Draw checkbox
+        pygame.draw.rect(screen, WHITE, checkbox_rect, 3)
+        if self.team_mode_enabled:
+            # Draw checkmark
+            pygame.draw.line(screen, GREEN, (checkbox_x + 5, checkbox_y + 15), (checkbox_x + 12, checkbox_y + 22), 4)
+            pygame.draw.line(screen, GREEN, (checkbox_x + 12, checkbox_y + 22), (checkbox_x + 25, checkbox_y + 8), 4)
+        
+        # Label
+        team_label = menu_font.render("Team Mode (Get CPU Teammates)", True, WHITE)
+        screen.blit(team_label, (checkbox_x + 40, checkbox_y))
+        
         # Instructions
-        inst = small_font.render("←→: Choose Color | ENTER: Confirm | ESC: Back", True, LIGHT_GRAY)
+        inst = small_font.render("←→: Choose Color | T: Toggle Team Mode | ENTER: Confirm | ESC: Back", True, LIGHT_GRAY)
         screen.blit(inst, inst.get_rect(center=(SCREEN_WIDTH // 2, 600)))
     
     def draw_join_game(self):
@@ -3113,7 +3601,14 @@ class Game:
         
         # CPU AI (only in CPU mode)
         if self.is_cpu_mode:
-            self.update_cpu()
+            if self.team_mode_enabled:
+                # Update all CPU players
+                for cpu_player in self.all_players:
+                    if cpu_player != self.player1 and cpu_player.health > 0:
+                        self.update_cpu_team(cpu_player)
+            else:
+                # Normal 1v1 CPU
+                self.update_cpu()
         
         # Update all players' projectiles and explosions
         for i, player in enumerate(self.all_players):
@@ -3121,17 +3616,84 @@ class Game:
                 # Update explosions
                 player.update_explosions()
                 
+                # Check projectiles against barriers
+                for proj in player.projectiles[:]:
+                    for barrier_owner in self.all_players:
+                        if barrier_owner.role == "Engineer" and barrier_owner.team != player.team:
+                            for structure in barrier_owner.structures[:]:
+                                if structure["type"] == "barrier":
+                                    # Check if projectile hits barrier
+                                    if (structure["x"] < proj.x < structure["x"] + structure["width"] and 
+                                        structure["y"] < proj.y < structure["y"] + structure["height"]):
+                                        # Hit barrier!
+                                        structure["health"] -= proj.damage
+                                        if structure["health"] <= 0:
+                                            barrier_owner.structures.remove(structure)
+                                            print("🔨 Barrier destroyed!")
+                                        if proj in player.projectiles:
+                                            player.projectiles.remove(proj)
+                                        break
+                
                 # Check projectiles against all OTHER players
                 for other in self.all_players:
-                    if other != player and other.health > 0:
+                    if other != player and other.health > 0 and not other.is_trapped:
+                        # Friendly fire prevention: skip teammates
+                        if self.team_mode_enabled and player.team == other.team:
+                            continue
                         player.update_projectiles(other)
                 
                 # Check melee attacks against all OTHER players
                 for other in self.all_players:
                     if other != player and other.health > 0:
+                        # Friendly fire prevention: skip teammates
+                        if self.team_mode_enabled and player.team == other.team:
+                            continue
                         if player.check_melee_hit(other):
                             # Melee hit! Show a small visual effect
                             pass
+            elif self.team_mode_enabled and not player.is_ghost:
+                # Player just died in team mode - turn into ghost
+                player.is_ghost = True
+                print(f"👻 {player.username} became a ghost!")
+                
+            # Ghost mode movement (still can move around as spectator)
+            if player.is_ghost and player == self.player1:
+                # Allow player to move as ghost
+                keys = pygame.key.get_pressed()
+                if keys[pygame.K_a]:
+                    player.x -= player.speed * 0.5
+                if keys[pygame.K_d]:
+                    player.x += player.speed * 0.5
+                if keys[pygame.K_w]:
+                    player.y -= player.speed * 0.5
+                if keys[pygame.K_s]:
+                    player.y += player.speed * 0.5
+            
+            # Update trap timers
+            if player.is_trapped:
+                player.trap_timer -= 1
+                if player.trap_timer <= 0:
+                    player.is_trapped = False
+                    print(f"🔓 {player.username} escaped the trap!")
+                else:
+                    # Trapped players can't move
+                    player.x = player.cage_x
+                    player.y = player.cage_y
+                    
+                    # Teammates can rescue by standing nearby
+                    for teammate in self.all_players:
+                        if teammate.team == player.team and teammate != player and teammate.health > 0:
+                            dist = ((teammate.x - player.x)**2 + (teammate.y - player.y)**2)**0.5
+                            if dist < 80:
+                                # Rescue progress - free after 2 seconds of contact
+                                player.trap_timer -= 5  # Faster escape with help
+                                if player.trap_timer <= 0:
+                                    player.is_trapped = False
+                                    print(f"🆘 {teammate.username} rescued {player.username}!")
+            
+            # Update trap cooldown
+            if player.trap_cooldown_timer > 0:
+                player.trap_cooldown_timer -= 1
         
         # Spawn and update collectibles
         self.collectible_spawn_timer += 1
@@ -3218,20 +3780,118 @@ class Game:
                 print("Everyone died! Game over")
         else:
             # CPU mode
-            if self.player1.health <= 0:
-                self.coins_lost = min(15, self.player1.coins)
-                self.player1.coins -= self.coins_lost
-                self.winner = "CPU"
-                self.loser = "Player 1"
-                self.state = GameState.LOSE
-            elif self.player2.health <= 0:
-                self.coins_earned = 25
-                self.player1.coins += self.coins_earned
-                self.coins_lost = 0
-                self.winner = "Player 1"
-                self.loser = "CPU"
-                self.state = GameState.WIN
+            if self.team_mode_enabled:
+                # Team mode: check if all enemy teams are defeated
+                player_team = self.player1.team
+                alive_players = [p for p in self.all_players if p.health > 0]
+                
+                # Check if player is alive
+                if self.player1.health <= 0:
+                    self.coins_lost = min(15, self.player1.coins)
+                    self.player1.coins -= self.coins_lost
+                    self.winner = "Enemy Team"
+                    self.loser = "Your Team"
+                    self.state = GameState.LOSE
+                else:
+                    # Check if any enemy team members are still alive
+                    enemy_alive = any(p.team != player_team for p in alive_players)
+                    
+                    if not enemy_alive:
+                        # All enemies defeated! Victory!
+                        self.coins_earned = 50  # Bonus coins for team victory
+                        self.player1.coins += self.coins_earned
+                        self.coins_lost = 0
+                        self.winner = "Your Team"
+                        self.loser = "Enemy Teams"
+                        self.state = GameState.WIN
+                        print("🎉 Team Victory!")
+            else:
+                # Normal 1v1 mode
+                if self.player1.health <= 0:
+                    self.coins_lost = min(15, self.player1.coins)
+                    self.player1.coins -= self.coins_lost
+                    self.winner = "CPU"
+                    self.loser = "Player 1"
+                    self.state = GameState.LOSE
+                elif self.player2.health <= 0:
+                    self.coins_earned = 25
+                    self.player1.coins += self.coins_earned
+                    self.coins_lost = 0
+                    self.winner = "Player 1"
+                    self.loser = "CPU"
+                    self.state = GameState.WIN
             
+    def update_cpu_team(self, cpu):
+        """Update CPU AI for team mode - targets nearest enemy"""
+        # Find nearest enemy (different team)
+        enemies = [p for p in self.all_players if p.health > 0 and p.team != cpu.team]
+        if not enemies:
+            return  # No enemies left
+        
+        # Find closest enemy
+        cpu_center_x = cpu.x + cpu.width // 2
+        cpu_center_y = cpu.y + cpu.height // 2
+        
+        target = min(enemies, key=lambda e: ((e.x + e.width//2 - cpu_center_x)**2 + (e.y + e.height//2 - cpu_center_y)**2)**0.5)
+        
+        # Apply gravity and physics
+        cpu.velocity_y += cpu.gravity
+        cpu.y += cpu.velocity_y
+        
+        # Check platform collisions
+        cpu.on_ground = False
+        for platform in self.platforms:
+            if platform.check_collision(cpu, cpu.velocity_y):
+                cpu.y = platform.y - cpu.height
+                cpu.velocity_y = 0
+                cpu.on_ground = True
+                break
+        
+        # Ground collision
+        if not cpu.on_ground and cpu.y >= cpu.ground_y:
+            cpu.y = cpu.ground_y
+            cpu.velocity_y = 0
+            cpu.on_ground = True
+        
+        # Simple AI: move toward target and shoot
+        target_center_x = target.x + target.width // 2
+        target_center_y = target.y + target.height // 2
+        horizontal_distance = abs(cpu_center_x - target_center_x)
+        
+        # Move toward target
+        ideal_distance = 250
+        if horizontal_distance > ideal_distance + 50:
+            if cpu.x < target.x:
+                cpu.x += cpu.speed * 0.8
+                cpu.facing_right = True
+            else:
+                cpu.x -= cpu.speed * 0.8
+                cpu.facing_right = False
+        elif horizontal_distance < ideal_distance - 50:
+            if cpu.x < target.x:
+                cpu.x -= cpu.speed * 0.6
+                cpu.facing_right = True
+            else:
+                cpu.x += cpu.speed * 0.6
+                cpu.facing_right = False
+        
+        # Jump occasionally when enemy is on platform above
+        if cpu.on_ground and target_center_y < cpu_center_y - 80 and random.random() < 0.02:
+            cpu.velocity_y = cpu.jump_power
+            cpu.on_ground = False
+        
+        # Shoot periodically with moderate accuracy
+        cpu.shoot_cooldown -= 1
+        if cpu.shoot_cooldown <= 0 and horizontal_distance < 400:
+            # Shoot with inaccuracy
+            offset_x = random.randint(-70, 70)
+            offset_y = random.randint(-50, 50)
+            cpu.shoot(target_center_x + offset_x, target_center_y + offset_y)
+            cpu.shoot_cooldown = random.randint(60, 100)
+        
+        # Keep CPU on screen
+        cpu.x = max(0, min(cpu.x, SCREEN_WIDTH - cpu.width))
+    
     def update_cpu(self):
         # HARD AI for CPU with ground-based movement!
         cpu = self.player2
@@ -3372,6 +4032,8 @@ class Game:
                     self.handle_username_input(event)
                 elif self.state == GameState.ROLE_SELECT:
                     self.handle_role_select_input(event)
+                elif self.state == GameState.CUSTOMIZE:
+                    self.handle_customize_input(event)
                 elif self.state == GameState.MENU:
                     running = self.handle_menu_input(event)
                 elif self.state == GameState.COLOR_SELECT:
@@ -3404,6 +4066,8 @@ class Game:
                 self.draw_username_input()
             elif self.state == GameState.ROLE_SELECT:
                 self.draw_role_select()
+            elif self.state == GameState.CUSTOMIZE:
+                self.draw_customize()
             elif self.state == GameState.MENU:
                 self.draw_menu()
             elif self.state == GameState.COLOR_SELECT:
