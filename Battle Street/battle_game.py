@@ -1006,6 +1006,25 @@ class Game:
         self.player2.projectiles = []
         self.player1.explosions = []
         self.player2.explosions = []
+        
+        # Clear Engineer structures and reset role-specific attributes
+        self.player1.structures = []
+        self.player2.structures = []
+        self.player1.in_vent = False
+        self.player2.in_vent = False
+        self.player1.vent_timer = 0
+        self.player2.vent_timer = 0
+        self.player1.vent_cooldown_timer = 0
+        self.player2.vent_cooldown_timer = 0
+        self.player1.is_trapped = False
+        self.player2.is_trapped = False
+        self.player1.trap_timer = 0
+        self.player2.trap_timer = 0
+        self.player1.trap_cooldown_timer = 0
+        self.player2.trap_cooldown_timer = 0
+        self.player1.is_ghost = False
+        self.player2.is_ghost = False
+        
         self.cpu_shoot_timer = 0
         self.cpu_strategy_timer = 0
         self.cpu_dodge_direction = 0
@@ -1028,6 +1047,14 @@ class Game:
         
         # Team mode: spawn CPU teammates
         if self.team_mode_enabled and self.is_cpu_mode:
+            # Clear any existing team structures first
+            for player in self.all_players:
+                if hasattr(player, 'structures'):
+                    player.structures = []
+                if hasattr(player, 'is_trapped'):
+                    player.is_trapped = False
+                if hasattr(player, 'is_ghost'):
+                    player.is_ghost = False
             self.spawn_teams()
         # If multiplayer, create additional players
         elif self.is_network_game and len(self.lobby_players) > 2:
